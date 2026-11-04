@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>G'day | منصة دورة الإيرادات الذكية</title>
+  <title>G'day | منصة المهام اليومية</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <!-- Google Fonts: IBM Plex Sans Arabic, Cairo & Plus Jakarta Sans for Executive UI -->
@@ -122,7 +122,7 @@
               <h2 class="font-brand font-extrabold text-xl tracking-tight">G'day Workspace</h2>
               <span class="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30 font-bold">دورة الإيرادات</span>
             </div>
-            <p class="text-xs text-slate-300">منصة إدارة المهام والجهات لقسم دورة الإيرادات</p>
+            <p class="text-xs text-slate-300">منصة إدارة المهام والجهات </p>
           </div>
         </div>
         <button onclick="app.closeLoginScreen()" class="w-8 h-8 rounded-xl bg-white/10 hover:bg-white/20 flex items-center justify-center text-slate-300">
@@ -143,7 +143,7 @@
 
       <!-- Team Members Profiles -->
       <div class="space-y-2">
-        <div class="text-[11px] font-extrabold text-indigo-200 px-1">أعضاء فريق دورة الإيرادات:</div>
+        <div class="text-[11px] font-extrabold text-indigo-200 px-1">أعضاء الفريق :</div>
         <div id="loginMembersList" class="grid grid-cols-2 gap-2 max-h-56 overflow-y-auto pr-1"></div>
       </div>
     </div>
@@ -327,7 +327,7 @@
         <!-- 2. RCM Projects / Channels (Full CRUD) -->
         <div>
           <div class="px-2 mb-1.5 flex items-center justify-between">
-            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">قنوات ومشاريع الإيرادات</span>
+            <span class="text-[10px] font-extrabold text-slate-400 uppercase tracking-wider">قنوات ومشاريع</span>
             <button onclick="app.openProjectModal()" class="text-[11px] bg-white/10 hover:bg-white/20 text-white px-2 py-0.5 rounded-lg font-bold flex items-center gap-1 transition">
               <i class="fa-solid fa-plus text-[9px]"></i>
               <span>مشروع</span>
@@ -406,7 +406,7 @@
           </div>
           <div class="min-w-0">
             <div class="flex items-center gap-2">
-              <h1 id="currentViewTitle" class="font-display font-black text-sm sm:text-base text-slate-900 dark:text-white truncate">كل مهام دورة الإيرادات (G'day)</h1>
+              <h1 id="currentViewTitle" class="font-display font-black text-sm sm:text-base text-slate-900 dark:text-white truncate">كل المهام (G'day)</h1>
               <button id="editCurrentProjectBtn" onclick="app.editActiveProject()" class="hidden text-xs text-slate-400 hover:text-indigo-500 transition" title="تعديل اسم ووصف القناة">
                 <i class="fa-solid fa-pen-to-square"></i>
               </button>
@@ -452,7 +452,7 @@
             <div class="absolute inset-y-0 right-0 w-1.5 bg-gradient-to-b from-amber-400 to-orange-500"></div>
             <div class="pr-2 min-w-0">
               <div class="flex items-center gap-1.5">
-                <p class="text-xs text-slate-600 dark:text-slate-300 font-extrabold">مهام ومطالبات اليوم</p>
+                <p class="text-xs text-slate-600 dark:text-slate-300 font-extrabold">مهام اليوم</p>
                 <span class="w-2 h-2 rounded-full bg-amber-500 animate-ping"></span>
               </div>
               <div class="flex items-baseline gap-2 mt-1">
@@ -475,7 +475,7 @@
                 <p id="kpiWaiting" class="text-2xl font-black text-sky-600 dark:text-sky-400">0</p>
                 <span id="kpiInProgressBadge" class="text-[11px] font-extrabold text-indigo-600 dark:text-indigo-300 bg-indigo-500/10 px-2 py-0.5 rounded-lg">⚡ 0 جاري العمل</span>
               </div>
-              <p class="text-[10px] text-slate-400 font-semibold mt-1 truncate">بانتظار رد نفيس / شركات التأمين</p>
+              <p class="text-[10px] text-slate-400 font-semibold mt-1 truncate">بانتظار الرد / صاحب العلاقة</p>
             </div>
             <div class="w-11 h-11 rounded-2xl bg-sky-500/15 text-sky-500 flex items-center justify-center shrink-0 group-hover:scale-110 transition">
               <i class="fa-solid fa-phone-volume text-lg"></i>
@@ -491,7 +491,7 @@
                 <p id="kpiTotalTime" class="text-2xl font-black text-indigo-600 dark:text-indigo-400">0 س</p>
                 <span id="kpiTotal" class="text-[11px] font-extrabold text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-lg">0 مهام</span>
               </div>
-              <p id="kpiTimeBreakdown" class="text-[10px] text-slate-400 font-semibold mt-1 truncate">موزعة على مشاريع دورة الإيرادات</p>
+              <p id="kpiTimeBreakdown" class="text-[10px] text-slate-400 font-semibold mt-1 truncate">موزعة على المشاريع </p>
             </div>
             <div class="w-11 h-11 rounded-2xl bg-indigo-500/15 text-indigo-500 flex items-center justify-center shrink-0 group-hover:scale-110 transition">
               <i class="fa-solid fa-stopwatch text-lg"></i>
@@ -1029,7 +1029,7 @@
             <i class="fa-solid fa-users-gear"></i>
           </div>
           <div>
-            <h3 class="font-black text-base text-slate-900 dark:text-white">إدارة أعضاء فريق G'day لدورة الإيرادات</h3>
+            <h3 class="font-black text-base text-slate-900 dark:text-white">إدارة أعضاء فريق G'day </h3>
             <p class="text-xs text-slate-500">إضافة عضو جديد، تعديل الاسم أو المسمى الوظيفي، أو حذف عضو بكل مرونة</p>
           </div>
         </div>
@@ -1227,7 +1227,7 @@
         pdfZoom: 100,
 
         members: [
-          { id: 'u_abdullah', name: 'عبدالله', role: 'admin', title: 'أدمن المنصة ومشرف دورة الإيرادات', color: 'bg-indigo-600' },
+          { id: 'u_abdullah', name: 'عبدالله', role: 'admin', title: 'أدمن المنصة', color: 'bg-indigo-600' },
           { id: 'u_alwaleed', name: 'الوليد', role: 'manager', title: 'مدير قسم دورة الإيرادات', color: 'bg-amber-500' },
           { id: 'u_m1', name: 'سارة', role: 'member', title: 'أخصائية مطالبات نفيس NPHIES', color: 'bg-emerald-600' },
           { id: 'u_m2', name: 'فهد', role: 'member', title: 'أخصائي المرفوضات والاعتراضات', color: 'bg-sky-600' },
@@ -1338,9 +1338,9 @@
                 <p>نأمل منكم التكرم بإعادة النظر واعتماد صرف المبالغ المستحقة خلال المهلة النظامية.</p>
                 <br/>
                 <div style="background: #f8fafc; border: 1px dashed #6366f1; padding: 12px; border-radius: 12px; color: #334155;">
-                  <strong>اعتماد قسم دورة الإيرادات بالرعاية الأولية:</strong><br/>
+                  <strong>اعتماد القسم بالرعاية الأولية:</strong><br/>
                   • مدير القسم: أ. الوليد<br/>
-                  • مشرف وأدمن المنصة: أ. عبدالله
+                  • مشرف المنصة: أ. عبدالله
                 </div>
               </div>
             `,
@@ -2177,7 +2177,7 @@
 
         if (activeView.type === 'smart') {
           const map = {
-            all: ['☀️', 'كل مهام دورة الإيرادات (G\'day)', 'متابعة فورية للمهام، الجهات المتواصل معها (Stakeholders)، والوقت المتوقع'],
+            all: ['☀️', 'كل مهام  (G\'day)', 'متابعة فورية للمهام، الجهات المتواصل معها (Stakeholders)، والوقت المتوقع'],
             today: ['🔔', 'مهام اليوم (Today\'s G\'day)', 'المهام المطلوب إنجازها ومتابعتها مع الجهات اليوم'],
             my_tasks: ['👤', `مهامي (${this.getCurrentUser().name})`, 'المهام المسندة إليك مباشرة مع أرقام وإيميلات الجهات'],
             waiting_stakeholder: ['⏳', 'مهام بانتظار رد الجهة (Stakeholders)', 'مهام تم التواصل فيها مع الجهات وبانتظار الرد أو التأكيد'],
@@ -3134,7 +3134,7 @@
               <i class="fa-solid fa-table text-indigo-500"></i><span>إدراج جدول</span>
             </button>
             <button onclick="app.insertDocOfficialStamp()" class="px-2.5 h-8 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-700 dark:text-amber-300 text-xs font-extrabold flex items-center gap-1">
-              <i class="fa-solid fa-stamp"></i><span>ختم قسم دورة الإيرادات</span>
+              <i class="fa-solid fa-stamp"></i><span>ختم القسم </span>
             </button>
             <button onclick="app.printOpenDoc()" class="px-2.5 h-8 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-xs font-bold flex items-center gap-1 mr-auto">
               <i class="fa-solid fa-print"></i><span>طباعة / PDF</span>
@@ -3188,7 +3188,7 @@
         const u = this.getCurrentUser();
         const stamp = `
           <div style="margin:14px 0;padding:12px 16px;border:2px solid #4f46e5;border-radius:14px;background:#eef2ff;color:#1e1b4b;display:inline-block;">
-            <strong>✅ معتمد رسمياً — قسم دورة الإيرادات بالرعاية الأولية (G'day RCM)</strong><br/>
+            <strong>✅ معتمد رسمياً — قسم الرعاية الأولية (G'day RCM)</strong><br/>
             <span style="font-size:12px;">تم التوقيع والمراجعة بواسطة: ${u.name} (${u.title}) • التاريخ: ${new Date().toLocaleDateString('ar-SA')}</span>
           </div>
         `;
@@ -3391,7 +3391,7 @@
             <div class="w-full max-w-2xl bg-white text-slate-900 rounded-2xl shadow-2xl p-6 sm:p-10 space-y-5 border-t-8 border-rose-600">
               <div class="flex items-center justify-between border-b border-slate-200 pb-4">
                 <div>
-                  <span class="text-[11px] font-black text-rose-600 uppercase">وثيقة PDF رسمية — قسم دورة الإيرادات (G'day RCM)</span>
+                  <span class="text-[11px] font-black text-rose-600 uppercase">وثيقة PDF رسمية — قسم  (G'day RCM)</span>
                   <input
                     type="text"
                     value="${currentPage.pageTitle.replace(/"/g, '&quot;')}"
@@ -4444,7 +4444,7 @@
         const rate = total ? Math.round((done / total) * 100) : 0;
 
         const lines = [
-          `☀️ *تقرير منصة G'day — قسم دورة الإيرادات*`,
+          `☀️ *تقرير منصة G'day — قسم  الإيرادات*`,
           `📅 التاريخ: ${new Date().toLocaleDateString('ar-SA')}`,
           `━━━━━━━━━━━━━━`,
           `✅ المنجز الكلي: ${done} من ${total} (${rate}%)`,

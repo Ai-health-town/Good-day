@@ -327,10 +327,19 @@ def test_native_ai_ui_persists_reply_and_reviewed_task(tmp_path, monkeypatch):
     token = store.login("owner", PASSWORD)
     monkeypatch.setattr(NeonAI, "answer", lambda *args, **kwargs: ("مقترح جاهز للمراجعة", [
         {"kind": "task_create", "values": {"title": "مهمة من محادثة AI"}}], {"total_tokens": 50}))
-    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+    app = AppTest.from_string('''
+import os
+import streamlit as st
+from app import setting
+from ai_ui import assistant_chat
+from workspace import Store
+store=Store(os.environ['DATABASE_URL'])
+token=st.session_state['token']
+state,_,actor=store.context(token)
+assistant_chat(store,token,state,actor,setting)
+''', default_timeout=20)
     app.session_state["token"] = token
     app.run()
-    app.radio(key="navigation").set_value("مركز المساعد").run()
     healthy(app)
     app.chat_input[0].set_value("جهز مهمة للمراجعة").run()
     healthy(app)
@@ -340,5 +349,3 @@ def test_native_ai_ui_persists_reply_and_reviewed_task(tmp_path, monkeypatch):
     element(app.button, "تطبيق وحفظ").click().run()
     healthy(app)
     assert store.read(token)[0]["tasks"][0]["title"] == "مهمة من محادثة AI"
-    app.radio(key="navigation").set_value("الربط والتخزين").run()
-    healthy(app)

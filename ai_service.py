@@ -17,6 +17,12 @@ class AICreditsRequired(WorkspaceError):
     """The gateway accepted the request but inference needs account credit."""
 
 
+class AIGatewayLimit(WorkspaceError):
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 @dataclass(frozen=True)
 class AIConfig:
     base_url: str
@@ -166,12 +172,18 @@ class NeonAI:
             raise WorkspaceError("لم يصل رد من AI Gateway. لم تُعد المحاولة تلقائيًا؛ راجع المحادثة قبل إرسال طلب جديد.") from None
         if response.status_code >= 300:
             try:
-                error = response.json().get("error", {})
-                detail = str(error.get("message", "") if isinstance(error, dict) else error).lower()
+                body = response.json()
+                error = body.get("error", {})
+                detail = str((error.get("message") if isinstance(error, dict) else error) or body.get("message", "")).lower()
             except (ValueError, AttributeError):
                 detail = ""
             if response.status_code in (402, 403, 429) and "credits" in detail:
                 raise AICreditsRequired("وصل الطلب إلى AI Gateway، لكن تشغيل النموذج يحتاج رصيد استدلال. افتح Neon ← Billing ← AI Gateway credits، ثم أعد الاختبار. لا تحتاج تغيير مفاتيح الربط بسبب هذا الخطأ.")
+            if response.status_code == 429:
+                try: retry_after = min(86400, max(1, int(response.headers.get("retry-after", ""))))
+                except ValueError: retry_after = None
+                message = "وصلت خدمة الذكاء إلى حد الصرف اليومي لدى Neon. طلبك محفوظ ويستكمل بعد إتاحة الخدمة." if "daily spend" in detail else "خدمة الذكاء مشغولة أو بلغت حد الاستخدام الحالي. طلبك محفوظ حتى تتاح الخدمة."
+                raise AIGatewayLimit(message, retry_after)
             messages = {401: "مفتاح AI Gateway غير صالح.", 403: "رفضت البوابة الوصول. تحقق من ai_gateway:invoke والفرع وإتاحة النموذج لخطة حسابك.",
                 429: "بلغت حدود استخدام AI Gateway أو رصيد الحساب؛ راجع Neon ثم أعد المحاولة لاحقًا.",
                 400: "رفضت البوابة إعداد الطلب؛ تحقق من اسم النموذج وتوفره في منطقتك.",
@@ -202,8 +214,9 @@ class NeonAI:
         except (KeyError, IndexError, TypeError, ValueError):
             raise WorkspaceError("وصل رد من البوابة دون إجابة اختبارية صالحة؛ لم يُثبت تشغيل النموذج بعد.") from None
 
-    def answer(self, question, context, history, allow_actions=False):
-        messages = [{"role": "system", "content": SYSTEM}]
+    def answer(self, question, context, history, allow_actions=False, *, system=SYSTEM, tool=TOOL,
+               action_message="جهزت مقترحًا للمراجعة أدناه؛ لم يُطبّق بعد."):
+        messages = [{"role": "system", "content": system}]
         for message in history[-8:]:
             if message["role"] in ("user", "assistant"):
                 messages.append({"role": message["role"], "content": message["content"][:6000]})
@@ -211,7 +224,7 @@ class NeonAI:
             json.dumps(context, ensure_ascii=False) + "\n\nالطلب الحالي:\n" + question})
         payload = {"model": self.config.model, "messages": messages, "max_tokens": self.config.output_tokens}
         if allow_actions:
-            payload["tools"] = [TOOL]
+            payload["tools"] = [tool]
             payload["tool_choice"] = "auto"
         response = self._request("POST", "chat/completions", payload)
         try:
@@ -236,7 +249,7 @@ class NeonAI:
             if len(actions) > 8:
                 raise ValueError()
             if not content.strip():
-                content = "جهزت مقترحًا للمراجعة أدناه؛ لم يُطبّق بعد." if actions else "لم يرجع النموذج إجابة؛ جرّب طلبًا أوضح."
+                content = action_message if actions else "لم يرجع النموذج إجابة؛ جرّب طلبًا أوضح."
         except WorkspaceError:
             raise
         except (KeyError, IndexError, TypeError, ValueError, AttributeError):

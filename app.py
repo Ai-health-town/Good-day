@@ -450,12 +450,8 @@ def browser_agent_page(store, token, state, actor):
 
 
 def agent_page(store, token, state, actor):
-    from ai_ui import assistant_chat
-    chat, access = st.tabs(["مساعد AI داخل المنصة", "حساب مساعد المتصفح"])
-    with chat:
-        assistant_chat(store, token, state, actor, setting)
-    with access:
-        browser_agent_page(store, token, state, actor)
+    from assistant_ui import help_center
+    help_center(store, token, state, actor, setting)
 
 
 def main():

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 
 import pandas as pd
 import streamlit as st
 
-from ai_service import AIConfig, NeonAI, build_context
+from ai_service import AICreditsRequired, AIConfig, NeonAI, build_context
 from ai_store import AIStore
 from components import lookup, perform
 from workspace import WorkspaceError, Store, now_iso, uid
@@ -141,50 +142,91 @@ def cloud_page(store, token, state, revision, actor, setting):
     st.subheader("حفظ دائم وربط واضح")
     st.write("قاعدة البيانات تحفظ حسابات الدخول والعمل والمحادثات. Object Storage يحفظ أصول الملفات، وAI Gateway يربط المساعد بالنموذج.")
     config, config_error = AIConfig.load(setting)
-    rows = [
-        {"الخدمة": "قاعدة البيانات وحسابات الفريق", "الحالة": "متصلة — PostgreSQL" if store.remote else "تجربة محلية — SQLite"},
-        {"الخدمة": "أصول الملفات — Object Storage", "الحالة": "الإعداد موجود؛ افحص الوصول أدناه" if store.storage else store.storage_error or "غير مفعّل"},
-        {"الخدمة": "المساعد — AI Gateway", "الحالة": "الإعداد موجود؛ افحص الوصول أدناه" if config else config_error},
-    ]
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    # Keep diagnostic outcomes across reruns, but invalidate them on configuration changes.
+    # Only a one-way fingerprint and redacted outcomes enter session state.
+    keys = ("AWS_ENDPOINT_URL_S3", "AWS_REGION", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "NEON_STORAGE_BUCKET", "NEON_AI_GATEWAY_BASE_URL", "NEON_AI_GATEWAY_TOKEN", "NEON_AI_MODEL")
+    signature = hashlib.sha256(json.dumps([str(id(store))] + [str(setting(k, "")) for k in keys]).encode()).hexdigest()
+    checks = st.session_state.setdefault("cloud_checks", {})
+    if checks.get("signature") != signature:
+        checks.clear()
+        checks["signature"] = signature
+    status_area = st.container()
+    a, b = st.columns(2)
+    if a.button("فحص مخزن الملفات", disabled=store.storage is None, width="stretch"):
+        try:
+            with st.spinner("يفحص الوصول إلى المخزن الخاص…"):
+                store.storage.check()
+            checks["storage"] = {"status": "ready", "message": "نجح الوصول إلى المخزن الخاص. لم تُنشأ ملفات ولم تتغير بيانات العمل.", "at": now_iso()}
+        except WorkspaceError as exc:
+            checks["storage"] = {"status": "error", "message": str(exc), "at": now_iso()}
+    if b.button("اختبار تشغيل المساعد", disabled=config is None, width="stretch"):
+        try:
+            with st.spinner("يطلب إجابة اختبارية قصيرة من النموذج…"):
+                NeonAI(config).check_inference()
+            checks["ai"] = {"status": "ready", "message": "وصلت إجابة فعلية من النموذج. المساعد جاهز من مركز المساعد.", "at": now_iso()}
+        except AICreditsRequired as exc:
+            checks["ai"] = {"status": "credits", "message": str(exc), "at": now_iso()}
+        except WorkspaceError as exc:
+            checks["ai"] = {"status": "error", "message": str(exc), "at": now_iso()}
+    st.caption("فحص التخزين للقراءة فقط. اختبار المساعد يرسل جملة اختبارية قصيرة دون بيانات الفريق وقد يستهلك مقدارًا صغيرًا من رصيد AI.")
+    storage_status = {"ready": "نجح الوصول إلى المخزن الخاص", "error": "تعذر الوصول — راجع نتيجة الفحص"}
+    ai_status = {"ready": "جاهز — نجح تشغيل النموذج", "credits": "ينتظر رصيد AI في Neon", "error": "تعذر التشغيل — راجع نتيجة الفحص"}
+    with status_area:
+        rows = [
+            {"الخدمة": "قاعدة البيانات وحسابات الفريق", "الحالة": "متصلة — الحفظ والدخول يعملان" if store.remote else "تجربة محلية — SQLite"},
+            {"الخدمة": "أصول الملفات — Object Storage", "الحالة": storage_status.get(checks.get("storage", {}).get("status"), "الإعداد مكتمل — افحص المخزن") if store.storage else store.storage_error or "غير مفعّل"},
+            {"الخدمة": "المساعد — AI Gateway", "الحالة": ai_status.get(checks.get("ai", {}).get("status"), "الإعداد مكتمل — اختبر تشغيل النموذج") if config else config_error},
+        ]
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        for service in ("storage", "ai"):
+            if result := checks.get(service):
+                show = st.success if result["status"] == "ready" else st.warning if result["status"] == "credits" else st.error
+                show(result["message"])
+                st.caption("آخر فحص في هذه الجلسة: " + result["at"])
     local = [f for f in state["files"] if f.get("blob")]
     cloud = [f for f in state["files"] if f.get("object")]
     a, b, c = st.columns(3)
     a.metric("ملفات بأصول داخل القاعدة", len(local))
     b.metric("أصول في التخزين المنفصل", len(cloud))
     c.metric("سجلات الملفات", len(state["files"]))
-    a, b = st.columns(2)
-    if a.button("فحص الوصول إلى مخزن الملفات", disabled=store.storage is None, width="stretch"):
-        try:
-            store.storage.check()
-            st.success("تم الوصول إلى المخزن. لا ينشئ الفحص ملفات ولا يغيّر البيانات.")
-        except WorkspaceError as exc: st.error(str(exc))
-    if b.button("فحص AI وعرض النماذج المتاحة", disabled=config is None, width="stretch"):
-        try:
-            models = NeonAI(config).models()
-            st.success("تم الوصول إلى AI Gateway؛ هذا فحص لقائمة النماذج ولا يرسل محتوى الفريق.")
-            st.write(models)
-            if config.model not in models: st.warning("اسم النموذج المضاف غير ظاهر في القائمة؛ تحقق منه قبل أول محادثة.")
-        except WorkspaceError as exc: st.error(str(exc))
-    with st.container(border=True):
-        st.markdown("**نقل أصول الملفات الموجودة إلى Neon Storage**")
-        st.caption("يحفظ النصوص والروابط والمهام كما هي، ويضع الأصول في المخزن الخاص. تؤخذ نقطة رجوع قبل النقل. تظل أصول المخزن محفوظة عند حذف سجل ملف حتى لا تتعطل النسخ القديمة.")
-        confirm = st.checkbox(f"أريد نقل أصول {len(local)} ملفات إلى المخزن المجهز لهذا التطبيق")
-        if st.button("نقل الملفات الحالية", disabled=not confirm or not local or store.storage is None, type="primary"):
-            perform(lambda: store.migrate_originals(token, revision), "نُقلت الأصول إلى Neon Storage وحُفظت روابطها")
-    with st.expander("إعدادات الاتصال — مرة واحدة"):
-        st.write("في مشروع Neon افتح Connect لنسخ اتصال PostgreSQL، وتبويبي Storage وAI Gateway. ضع القيم في Streamlit → Settings → Secrets. أبقِ بيانات المدير ورابط القاعدة الحاليين عند التحديث.")
-        st.code('''# قيم نموذجية؛ استبدلها من Neon Connect
+    if local:
+        with st.container(border=True):
+            st.markdown("**نقل أصول الملفات الموجودة إلى Neon Storage**")
+            st.caption("تبقى النصوص والروابط والمهام محفوظة. تؤخذ نقطة رجوع قبل النقل، وتظل أصول المخزن متاحة للنسخ القديمة.")
+            confirm = st.checkbox(f"أريد نقل أصول {len(local)} ملفات إلى المخزن المجهز لهذا التطبيق")
+            if st.button("نقل الملفات الحالية", disabled=not confirm or store.storage is None, type="primary"):
+                perform(lambda: store.migrate_originals(token, revision), "نُقلت الأصول إلى Neon Storage وحُفظت روابطها")
+    elif not state["files"]:
+        st.info("المكتبة جاهزة لأول ملف. ارفعه من قسم الملفات؛ تُحفظ الأصول في المخزن الخاص عند اكتمال إعداده. لا توجد ملفات قديمة تحتاج إلى النقل.")
+    else:
+        st.caption("لا توجد أصول داخل قاعدة البيانات تحتاج إلى النقل.")
+    complete = store.storage is not None and config is not None
+    with st.expander("تفاصيل الربط" if complete else "إكمال إعدادات الاتصال"):
+        if complete:
+            st.write(f"المخزن: {store.storage.bucket} · النموذج: {config.model}")
+            st.caption("إعدادات التخزين والمساعد محملة من Secrets. استخدم الفحص أعلاه للتحقق من الوصول وتشغيل النموذج.")
+        else:
+            st.write("أضف إعدادات الخدمة الناقصة من Neon Connect إلى Streamlit → Settings → Secrets. أبقِ رابط القاعدة وبيانات الحسابات الحالية كما هي.")
+        if store.storage is None:
+            st.code('''# إعدادات التخزين فقط — استبدل الأمثلة بقيم Neon Connect
 AWS_ENDPOINT_URL_S3 = "https://YOUR_STORAGE_HOST.neon.tech"
 AWS_REGION = "YOUR_REGION"
 AWS_ACCESS_KEY_ID = "REPLACE_WITH_STORAGE_ACCESS_KEY"
 AWS_SECRET_ACCESS_KEY = "REPLACE_WITH_STORAGE_SECRET"
-NEON_STORAGE_BUCKET = "gday-private"
-
+NEON_STORAGE_BUCKET = "gday-private"''', language="toml")
+        if config is None:
+            st.code('''# إعدادات المساعد فقط — استبدل الأمثلة بقيم Neon Connect
 NEON_AI_GATEWAY_BASE_URL = "https://YOUR_GATEWAY_HOST.neon.tech"
 NEON_AI_GATEWAY_TOKEN = "REPLACE_WITH_GATEWAY_TOKEN"
 NEON_AI_MODEL = "COPY_MODEL_ID_FROM_NEON"
 GDAY_AI_DAILY_LIMIT = 40
 GDAY_AI_MAX_OUTPUT_TOKENS = 1800''', language="toml")
         st.caption("يجب أن يكون المخزن private. Storage يحتاج storage:read وstorage:write، وAI يحتاج ai_gateway:invoke. مفتاح إدارة Neon العام لا يوضع في المنصة.")
-        st.info("AI Gateway يحتاج خطة Neon مدفوعة ورصيدًا، والمنطقة يجب أن تدعم الخدمات. لا تنقل قاعدة موجودة ولا تشترِ رصيدًا قبل مراجعة الإعدادات التي تحتاجها.")
+        if st.button("عرض النماذج المتاحة", disabled=config is None):
+            try:
+                models = NeonAI(config).models()
+                st.write(models)
+                st.caption("ظهور قائمة النماذج يثبت الوصول إلى البوابة؛ اختبار التشغيل أعلاه يتحقق من إمكانية الحصول على إجابة.")
+                if config.model not in models: st.warning("اسم النموذج المحدد غير ظاهر في القائمة؛ تحقق منه في Neon.")
+            except WorkspaceError as exc: st.error(str(exc))

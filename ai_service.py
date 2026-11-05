@@ -13,6 +13,10 @@ from filetools import file_text, file_sheets
 from workspace import WorkspaceError, STATUSES, PRIORITIES, today_iso
 
 
+class AICreditsRequired(WorkspaceError):
+    """The gateway accepted the request but inference needs account credit."""
+
+
 @dataclass(frozen=True)
 class AIConfig:
     base_url: str
@@ -167,7 +171,7 @@ class NeonAI:
             except (ValueError, AttributeError):
                 detail = ""
             if response.status_code in (402, 403, 429) and "credits" in detail:
-                raise WorkspaceError("AI Gateway يحتاج رصيد استدلال. أضف الرصيد من صفحة الفوترة في Neon ثم أعد المحاولة؛ إعدادات الربط الحالية لا تحتاج تغييرًا بسبب هذا الخطأ.")
+                raise AICreditsRequired("وصل الطلب إلى AI Gateway، لكن تشغيل النموذج يحتاج رصيد استدلال. افتح Neon ← Billing ← AI Gateway credits، ثم أعد الاختبار. لا تحتاج تغيير مفاتيح الربط بسبب هذا الخطأ.")
             messages = {401: "مفتاح AI Gateway غير صالح.", 403: "رفضت البوابة الوصول. تحقق من ai_gateway:invoke والفرع وإتاحة النموذج لخطة حسابك.",
                 429: "بلغت حدود استخدام AI Gateway أو رصيد الحساب؛ راجع Neon ثم أعد المحاولة لاحقًا.",
                 400: "رفضت البوابة إعداد الطلب؛ تحقق من اسم النموذج وتوفره في منطقتك.",
@@ -183,6 +187,20 @@ class NeonAI:
     def models(self):
         data = self._request("GET", "models")
         return [str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str)][:300]
+
+    def check_inference(self):
+        """One small, explicit diagnostic call without workspace data or tools."""
+        data = self._request("POST", "chat/completions", {
+            "model": self.config.model,
+            "messages": [{"role": "user", "content": "Reply with the word READY only."}],
+            "max_tokens": 32,
+        })
+        try:
+            content = data["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError()
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise WorkspaceError("وصل رد من البوابة دون إجابة اختبارية صالحة؛ لم يُثبت تشغيل النموذج بعد.") from None
 
     def answer(self, question, context, history, allow_actions=False):
         messages = [{"role": "system", "content": SYSTEM}]

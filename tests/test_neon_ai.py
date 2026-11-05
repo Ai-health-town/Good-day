@@ -11,7 +11,7 @@ from workspace import Store, WorkspaceError, Forbidden, Conflict, prepare_import
 from cloud_storage import NeonStorage, neon_host, validate_object
 from filetools import parse_upload
 from migration import file_fingerprint
-from ai_service import AIConfig, NeonAI, build_context
+from ai_service import AICreditsRequired, AIConfig, NeonAI, build_context
 from ai_store import AIStore, normalize_actions
 
 PASSWORD = "Only-local-test-123!"
@@ -257,6 +257,60 @@ def test_gateway_distinguishes_empty_credits_from_invalid_credentials():
     with pytest.raises(WorkspaceError, match="رصيد استدلال") as error:
         NeonAI(cfg, transport).answer("اختبار", {}, [], False)
     assert "test-secret" not in str(error.value)
+
+
+def test_inference_check_requires_an_actual_bounded_reply_without_team_data():
+    captured = []
+    def handle(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "READY"}}]})
+    cfg = AIConfig("https://br-test.ai.c-2.eu-central-1.aws.neon.tech", "test-secret", "configured-model")
+    NeonAI(cfg, httpx.MockTransport(handle)).check_inference()
+    assert len(captured) == 1
+    assert captured[0]["max_tokens"] == 32 and "tools" not in captured[0]
+    assert captured[0]["messages"] == [{"role": "user", "content": "Reply with the word READY only."}]
+    bad = httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": []}))
+    with pytest.raises(WorkspaceError, match="دون إجابة اختبارية"):
+        NeonAI(cfg, bad).check_inference()
+
+
+def test_connection_page_keeps_diagnostics_and_hides_completed_setup(tmp_path, monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    from tests.test_ui import healthy, element
+    import cloud_storage
+    url = "sqlite:///" + str(tmp_path / "ui_connections.db")
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("GDAY_LOCAL_MODE", "true")
+    monkeypatch.setenv("NEON_AI_GATEWAY_BASE_URL", "https://br-test.ai.c-2.eu-central-1.aws.neon.tech")
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "test-secret-not-real")
+    monkeypatch.setenv("NEON_AI_MODEL", "configured-model")
+    storage = NeonStorage(ENDPOINT, "gday-private", "test-access", "test-secret", "eu-central-1", FakeS3())
+    monkeypatch.setattr(cloud_storage, "storage_from_settings", lambda _: (storage, ""))
+    def needs_credit(_):
+        raise AICreditsRequired("يحتاج رصيد استدلال للاختبار")
+    monkeypatch.setattr(NeonAI, "check_inference", needs_credit)
+    store = Store(url)
+    store.bootstrap("owner", PASSWORD)
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+    app.session_state["token"] = store.login("owner", PASSWORD)
+    app.run()
+    app.radio(key="navigation").set_value("الربط والتخزين").run()
+    healthy(app)
+    assert not app.code
+    assert not any(b.label == "نقل الملفات الحالية" for b in app.button)
+    element(app.button, "فحص مخزن الملفات").click().run()
+    healthy(app)
+    assert any("نجح الوصول إلى المخزن الخاص" in x.value for x in app.success)
+    element(app.button, "اختبار تشغيل المساعد").click().run()
+    healthy(app)
+    assert any("رصيد استدلال" in x.value for x in app.warning)
+    app.run()
+    assert any("رصيد استدلال" in x.value for x in app.warning)
+    assert any("نجح الوصول إلى المخزن الخاص" in x.value for x in app.success)
+    monkeypatch.setenv("NEON_AI_GATEWAY_TOKEN", "replacement-test-key")
+    app.run()
+    healthy(app)
+    assert not any("رصيد استدلال" in x.value for x in app.warning)
 
 
 def test_native_ai_ui_persists_reply_and_reviewed_task(tmp_path, monkeypatch):

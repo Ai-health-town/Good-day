@@ -20,6 +20,8 @@ def label(value):
 def file_fingerprint(record):
     if record.get("type") == "sheet":
         return hashlib.sha256(json.dumps(file_sheets(record), ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    if record.get("object"):
+        return record["object"]["sha256"]
     if record.get("blob"):
         return hashlib.sha256(base64.b64decode(record["blob"])).hexdigest()
     if record.get("content"):

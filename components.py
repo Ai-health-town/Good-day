@@ -57,6 +57,17 @@ def end_day(store, token, state, actor):
     st.write("كل تعديل تحفظه محفوظ مباشرة في المنصة. نسخة اليوم تجمع المهام والملفات والمحادثات وتسليم اليوم في ملف واحد.")
     st.download_button("تنزيل نسخة اليوم كاملة — JSON", store.backup_bytes(state), file_name=f"Gday_{today_iso()}.json", mime="application/json", type="primary", width="stretch")
     st.caption("النسخة لا تحتوي كلمات المرور أو جلسات الدخول. تُستعاد من زر بداية اليوم.")
+    if any(f.get("object") for f in state["files"]):
+        backup_revision = store.read(token)[1]
+        st.info("النسخة الخفيفة تحفظ روابط الأصول الخاصة وتحتاج مخزن Neon نفسه. لإنشاء نسخة مستقلة بالأصول اضغط الإعداد أدناه (حتى 30 ميجابايت). محادثات AI الخاصة تُصدّر من مركز المساعد.")
+        if st.button("إعداد نسخة تشمل الملفات الأصلية", key="prepare_portable_backup"):
+            try:
+                st.session_state["portable_backup"] = (backup_revision, store.export_with_originals(token))
+            except WorkspaceError as exc:
+                st.error(str(exc))
+        portable = st.session_state.get("portable_backup")
+        if portable and portable[0] == backup_revision:
+            st.download_button("تنزيل النسخة المستقلة بالأصول", portable[1], f"Gday_portable_{today_iso()}.json", "application/json")
     if actor["role"] in ("admin", "manager"):
         if st.button("حفظ نقطة رجوع داخل المنصة", width="stretch"):
             perform(lambda: store.save_snapshot(token, "نهاية يوم " + today_iso()), "حُفظت نسخة اليوم داخل المنصة")
@@ -221,11 +232,16 @@ def edit_file(store, token, state, actor, original):
     record = copy.deepcopy(original)
     editable = store.can_edit(actor)
     st.subheader(record["title"])
-    if record.get("blob"):
-        st.download_button("تنزيل الملف الأصلي", base64.b64decode(record["blob"]), file_name=Path(record.get("originalName", record["title"])).name, width="stretch")
-        if record.get("type") == "pdf":
-            st.pdf(base64.b64decode(record["blob"]), height=480, key="pdf_" + record["id"])
-    if record.get("legacy") and not record.get("blob"):
+    if record.get("blob") or record.get("object"):
+        try:
+            original_bytes = store.file_bytes(token, record["id"])
+        except WorkspaceError as exc:
+            st.warning(str(exc))
+        else:
+            st.download_button("تنزيل الملف الأصلي", original_bytes, file_name=Path(record.get("originalName", record["title"])).name, width="stretch")
+            if record.get("type") == "pdf":
+                st.pdf(original_bytes, height=480, key="pdf_" + record["id"])
+    if record.get("legacy") and not (record.get("blob") or record.get("object")):
         st.info("هذا المحتوى من النسخة السابقة. النسخة السابقة حفظت نصوصًا وجداول فقط؛ يتوفر هنا المحتوى المحفوظ فيها.")
     title = st.text_input("اسم الملف", record["title"], disabled=not editable)
     project = record_picker("مشروع الملف", state["projects"], record.get("projectId"), empty=False)
@@ -253,7 +269,7 @@ def edit_file(store, token, state, actor, original):
     else:
         if record.get("type") == "pdf":
             st.caption("ملف PDF الأصلي محفوظ كما رُفع. المساحة التالية لكتابة ملخص أو ملاحظات مرتبطة به.")
-        elif record.get("blob"):
+        elif record.get("blob") or record.get("object"):
             st.caption("تحرير النص وتصديره ينشئ مستندًا مبسطًا. الملف الأصلي يحتفظ بتنسيقه ومحتواه الكامل.")
         text = st.text_area("محتوى المستند" if record.get("type") != "pdf" else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
         record["text"] = text
@@ -278,7 +294,7 @@ def edit_file(store, token, state, actor, original):
     if actor["role"] in ("admin", "manager"):
         with st.expander("حذف الملف"):
             confirmed = st.checkbox("تأكيد حذف الملف")
-            if st.button("حذف الملف نهائيًا", disabled=not confirmed):
+            if st.button("حذف الملف من المكتبة", disabled=not confirmed):
                 perform(lambda: store.remove(token, "files", original["id"], original.get("version", 1)), "حُذف الملف")
 
 

@@ -162,6 +162,9 @@ def prepare_import(raw):
                 # Legacy roles are display metadata, never authentication permissions.
                 record = {k: record.get(k, "") for k in ("id", "name", "title", "color")} | {"version": 1}
             if name == "files":
+                if "object" in record:
+                    from cloud_storage import validate_object
+                    validate_object(record["object"])
                 if not isinstance(record.get("title"), str):
                     raise WorkspaceError("اسم ملف غير صالح.")
                 if record.get("type") not in ("doc", "sheet", "pdf"):
@@ -227,7 +230,9 @@ snapshots = Table("gday_snapshots", metadata, Column("id", String(64), primary_k
 
 
 class Store:
-    def __init__(self, database_url):
+    def __init__(self, database_url, storage=None):
+        self.storage = storage
+        self.storage_error = ""
         self._cache_lock = threading.RLock()
         self._cached_revision = None
         self._cached_state = None
@@ -418,6 +423,8 @@ class Store:
                     raise WorkspaceError("نص الرسالة مطلوب، وبحد أقصى 20 ألف حرف.")
                 record["authorId"] = old.get("authorId") if old else actor["member_id"]
                 record["time"] = old.get("time", now_iso()) if old else now_iso()
+            if collection == "files" and self.storage and record.get("blob"):
+                record = self.storage.externalize(record)
             record["version"] = old.get("version", 1) + 1 if old else 1
             record["updatedAt"] = now_iso()
             record["updatedBy"] = actor["member_id"]
@@ -481,6 +488,8 @@ class Store:
                 if record.get("id") in seen or not record.get("id") or not record.get("title"):
                     raise WorkspaceError("يوجد ملف ناقص البيانات أو مكرر.")
                 seen.add(record["id"])
+                if self.storage:
+                    record = self.storage.externalize(record)
                 record.update(version=1, updatedAt=now_iso(), updatedBy=actor["member_id"])
                 state["files"].append(record)
                 self._log(conn, actor, "رفع ملف", record["title"])
@@ -540,6 +549,8 @@ class Store:
                 self._snapshot(conn, state, "قبل الاستيراد الإضافي")
                 for collection, records in additions.items():
                     for record in records:
+                        if collection == "files" and self.storage:
+                            record = self.storage.externalize(record)
                         record.update(version=1, updatedAt=now_iso(), updatedBy=actor["member_id"])
                         state[collection].append(record)
                 self._save(conn, state, revision)
@@ -573,6 +584,58 @@ class Store:
     @staticmethod
     def backup_bytes(state):
         return dumps({"format": "gday.workspace", "schema_version": 2, "exported_at": now_iso(), "data": state}).encode("utf-8")
+
+    def file_bytes(self, token, file_id):
+        """Only a live, authenticated workspace record can name a downloadable object."""
+        state, _ = self.read(token)
+        record = next((f for f in state["files"] if f["id"] == file_id), None)
+        if record is None:
+            raise WorkspaceError("الملف غير موجود.")
+        return self._original_bytes(record)
+
+    def _original_bytes(self, record):
+        if record.get("blob"):
+            return base64.b64decode(record["blob"], validate=True)
+        if record.get("object"):
+            if not self.storage:
+                raise WorkspaceError("أعد إعداد مخزن Neon للوصول إلى هذا الأصل؛ المحتوى المحرر ما زال محفوظًا.")
+            return self.storage.download(record["object"])
+        return b""
+
+    def export_with_originals(self, token):
+        state, _ = self.read(token)
+        total = len(dumps(state).encode())
+        for record in state["files"]:
+            if record.get("object"):
+                total += (record["object"]["size"] + 2) // 3 * 4
+        if total > MAX_BACKUP - 4096:
+            raise WorkspaceError("النسخة بالأصول تتجاوز 30 ميجابايت. استخدم النسخة الخفيفة، ونزّل الأصول المطلوبة من المكتبة.")
+        for record in state["files"]:
+            if record.get("object"):
+                record["blob"] = base64.b64encode(self._original_bytes(record)).decode()
+                record.pop("object", None)
+        return self.backup_bytes(state)
+
+    def migrate_originals(self, token, expected_revision):
+        """Move originals without changing IDs or text. No storage object is deleted."""
+        with self.transaction() as conn:
+            actor = self._actor(conn, token)
+            self.require(actor, "admin")
+            state, revision = self._state(conn)
+            if revision != expected_revision:
+                raise Conflict("تغيرت البيانات؛ حدّث عرض التخزين ثم أعد النقل.")
+            if not self.storage:
+                raise WorkspaceError("أكمل ربط Object Storage أولًا.")
+            originals = [f for f in state["files"] if f.get("blob")]
+            if originals:
+                self._snapshot(conn, state, "قبل نقل أصول الملفات إلى Neon Storage")
+                for record in originals:
+                    result = self.storage.externalize(record)
+                    result.update(version=record.get("version", 1) + 1, updatedAt=now_iso(), updatedBy=actor["member_id"])
+                    record.clear(); record.update(result)
+                self._save(conn, state, revision)
+                self._log(conn, actor, "نقل أصول الملفات إلى Neon Storage", str(len(originals)))
+            return len(originals)
 
     def _snapshot(self, conn, state, label):
         ident = uid("snap_")

@@ -20,7 +20,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
-                        Text, create_engine, delete, event, insert, select, update)
+                        Text, case, create_engine, delete, event, insert, select, update)
 from sqlalchemy.exc import IntegrityError
 
 ZONE = ZoneInfo("Asia/Riyadh")
@@ -236,6 +236,7 @@ class Store:
         self._cache_lock = threading.RLock()
         self._cached_revision = None
         self._cached_state = None
+        self._initialized = False
         if database_url.startswith("postgres://"):
             database_url = "postgresql+psycopg://" + database_url[len("postgres://"):]
         elif database_url.startswith("postgresql://"):
@@ -287,25 +288,41 @@ class Store:
             self._cached_revision = None
             self._cached_state = None
 
-    def _read_cached(self, conn):
-        revision = conn.execute(select(workspaces.c.revision).where(workspaces.c.id == "main")).scalar_one()
-        with self._cache_lock:
-            if revision != self._cached_revision:
-                self._cached_state, self._cached_revision = self._state(conn)
-            return copy.deepcopy(self._cached_state), self._cached_revision
-
     def context(self, token):
+        # Keep a local reference to an immutable snapshot. Other readers can
+        # refresh/invalidate the shared cache while this query is in flight.
+        with self._cache_lock:
+            cached_state, cached_revision = self._cached_state, self._cached_revision
+        payload = workspaces.c.payload if cached_revision is None else case(
+            (workspaces.c.revision != cached_revision, workspaces.c.payload), else_=None)
+        statement = self._actor_statement(token).add_columns(
+            workspaces.c.revision.label("workspace_revision"), payload.label("workspace_payload")
+        ).join(workspaces, workspaces.c.id == "main")
         with self.engine.connect() as conn:
-            actor = self._actor(conn, token)
-            state, revision = self._read_cached(conn)
-            return state, revision, actor
+            row = conn.execute(statement).mappings().first()
+        if not row:
+            raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
+        revision = row["workspace_revision"]
+        state = json.loads(row["workspace_payload"]) if row["workspace_payload"] is not None else cached_state
+        if row["workspace_payload"] is not None:
+            with self._cache_lock:
+                if self._cached_revision is None or revision >= self._cached_revision:
+                    self._cached_state, self._cached_revision = state, revision
+        actor = {column.name: row[column.name] for column in users.c if column.name != "password_hash"}
+        return copy.deepcopy(state), revision, actor
 
     def _log(self, conn, actor, action, detail=""):
         conn.execute(insert(audit).values(id=uid(), at=now_iso(), actor=actor["name"], action=action, detail=detail[:1000]))
 
     def initialized(self):
+        # Bootstrap status is stable once accounts exist. Authentication and
+        # permissions are still checked against the database on every read.
+        if self._initialized:
+            return True
         with self.engine.connect() as conn:
-            return conn.execute(select(users.c.id).limit(1)).first() is not None
+            ready = conn.execute(select(users.c.id).limit(1)).first() is not None
+        self._initialized = ready
+        return ready
 
     def bootstrap(self, username, password, name="مدير المنصة"):
         if self.initialized():
@@ -320,6 +337,7 @@ class Store:
             state, revision = self._state(conn)
             state["members"].append({"id": member_id, "name": name, "title": "مدير المنصة", "version": 1})
             self._save(conn, state, revision)
+        self._initialized = True
 
     def login(self, username, password, days=30):
         try:
@@ -352,14 +370,20 @@ class Store:
             self._log(conn, user, "تسجيل دخول")
             return token
 
-    def _actor(self, conn, token):
+    @staticmethod
+    def _actor_statement(token):
         if not isinstance(token, str) or not 20 <= len(token) <= 200:
             raise Forbidden("سجّل الدخول أولًا.")
-        row = conn.execute(select(users).join(sessions, users.c.id == sessions.c.user_id).where(
-            sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest(), sessions.c.expires > time.time(), users.c.active.is_(True))).mappings().first()
+        return select(*[column for column in users.c if column.name != "password_hash"]).select_from(
+            users.join(sessions, users.c.id == sessions.c.user_id)).where(
+            sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest(),
+            sessions.c.expires > time.time(), users.c.active.is_(True))
+
+    def _actor(self, conn, token):
+        row = conn.execute(self._actor_statement(token)).mappings().first()
         if not row:
             raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
-        return {k: v for k, v in row.items() if k != "password_hash"}
+        return dict(row)
 
     def actor(self, token):
         with self.engine.connect() as conn:
@@ -376,10 +400,8 @@ class Store:
             raise Forbidden("حسابك لا يملك صلاحية تنفيذ هذا الإجراء.")
 
     def read(self, token):
-        with self.engine.connect() as conn:
-            self._actor(conn, token)
-            state, revision = self._read_cached(conn)
-            return state, revision
+        state, revision, _ = self.context(token)
+        return state, revision
 
     def logout(self, token, all_sessions=False):
         with self.transaction() as conn:

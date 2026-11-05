@@ -359,8 +359,7 @@ def clear_chat_dialog(store, token, state, revision):
 @st.fragment(run_every="20s")
 def chat_page(store, token, project_id=""):
     try:
-        actor = store.actor(token)
-        state, revision = store.read(token)
+        state, revision, actor = store.context(token)
     except Forbidden:
         st.rerun()
     a, b = st.columns([5, 1.4])

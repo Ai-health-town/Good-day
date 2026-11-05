@@ -102,21 +102,20 @@ def test_table_batch_is_atomic_and_completion_time_is_real(workspace):
 
 
 def test_payload_cache_checks_revision_and_auth_on_every_read(workspace):
+    from unittest.mock import patch
     store, owner = workspace
-    payload_reads = []
-    def inspect_sql(conn, cursor, statement, parameters, context, executemany):
-        if "gday_workspace.payload" in statement and statement.lstrip().upper().startswith("SELECT"):
-            payload_reads.append(statement)
-    event.listen(store.engine, "before_cursor_execute", inspect_sql)
-    state, _, _ = store.context(owner)
-    store.context(owner)
-    assert len(payload_reads) == 1
-    with pytest.raises(Forbidden):
-        store.context("wrong-token-that-is-not-authorized")
+    with patch("workspace.json.loads", wraps=json.loads) as decode:
+        state, _, _ = store.context(owner)
+        store.context(owner)
+        assert decode.call_count == 1
+        with pytest.raises(Forbidden):
+            store.context("wrong-token-that-is-not-authorized")
+        assert decode.call_count == 1
     other = Store(str(store.engine.url))
     other.put(owner, "stakeholders", {"id": "new", "name": "آخر تعديل"})
-    assert store.context(owner)[0]["stakeholders"][0]["name"] == "آخر تعديل"
-    assert len(payload_reads) == 2
+    with patch("workspace.json.loads", wraps=json.loads) as decode:
+        assert store.context(owner)[0]["stakeholders"][0]["name"] == "آخر تعديل"
+        assert decode.call_count == 1
     state["projects"][0]["name"] = "لا يكتب في الذاكرة المشتركة"
     assert store.context(owner)[0]["projects"][0]["name"] == "مساحة الفريق"
 

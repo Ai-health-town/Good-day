@@ -478,7 +478,13 @@ def main():
             st.info("أضف بيانات المدير الأول في Secrets. كلمة المرور 12 حرفًا على الأقل."); return
         store.bootstrap(username, password, str(setting("GDAY_ADMIN_NAME", "مدير المنصة")))
     cookies = stx.CookieManager(key="gday_cookies")
-    if st.session_state.pop("delete_cookie", False): cookies.delete(COOKIE, key="remove_gday_cookie")
+    if st.session_state.pop("delete_cookie", False):
+        try:
+            cookies.delete(COOKIE, key="remove_gday_cookie")
+        except KeyError:
+            # The component already requested browser deletion; its local
+            # cookie snapshot may still be empty on this first render.
+            pass
     pending = st.session_state.pop("set_cookie", None)
     if pending:
         cookies.set(COOKIE, pending, key="remember_gday_cookie", expires_at=datetime.now(timezone.utc) + timedelta(days=REMEMBER_DAYS), secure=(st.context.url or "").startswith("https:"), same_site="strict", path="/")

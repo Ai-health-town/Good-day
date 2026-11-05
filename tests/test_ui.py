@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from streamlit.testing.v1 import AppTest
 
 
@@ -99,3 +100,35 @@ if token:
     element(app.button, "حفظ تعديلات الملف").click().run()
     healthy(app)
     assert store.read(token)[0]["files"][0]["text"] == "محتوى الملف بعد التعديل"
+
+
+@pytest.mark.parametrize("remember", [False, True])
+def test_member_can_navigate_and_sign_out_without_a_loaded_cookie(tmp_path, monkeypatch, remember):
+    from workspace import Store, Forbidden
+
+    url = "sqlite:///" + str(tmp_path / "member_navigation.db")
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("GDAY_LOCAL_MODE", "true")
+    store = Store(url)
+    store.bootstrap("qa_owner", "QA-owner-password-924!")
+    owner = store.login("qa_owner", "QA-owner-password-924!")
+    store.create_user(owner, "qa_member", "عضو اختبار", "QA-member-password-923!", "member")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20).run()
+    healthy(app)
+    element(app.text_input, "اسم المستخدم").set_value("qa_member")
+    element(app.text_input, "كلمة المرور").set_value("QA-member-password-923!")
+    next(iter(app.checkbox)).set_value(remember)
+    element(app.button, "دخول إلى مساحة العمل").click().run()
+    healthy(app)
+    token = app.session_state["token"]
+    assert store.actor(token)["role"] == "member"
+    for page in ["المهام", "الجهات", "نظرة اليوم"]:
+        app.radio(key="navigation").set_value(page).run()
+        healthy(app)
+        assert element(app.sidebar.button, "تسجيل الخروج")
+    element(app.sidebar.button, "تسجيل الخروج").click().run()
+    healthy(app)
+    assert element(app.button, "دخول إلى مساحة العمل")
+    assert app.session_state["block_cookie"] is True
+    with pytest.raises(Forbidden):
+        store.actor(token)

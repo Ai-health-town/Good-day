@@ -7,6 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
+from contacttools import phone_parts, phone_html, matches_contact
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
 COOKIE = "gday_session_v2"
 
@@ -179,13 +180,18 @@ def edit_directory(store, token, state, actor, collection, original=None):
             record["desc"] = st.text_area("وصف المشروع", record.get("desc", ""))
         elif collection == "stakeholders":
             record["org"] = st.text_input("الجهة", record.get("org", ""))
-            record["phone"] = st.text_input("رقم التواصل", record.get("phone", ""))
-            record["email"] = st.text_input("البريد الإلكتروني", record.get("email", ""))
+            with st.container(key="contact_phone_input"):
+                record["phone"] = st.text_input("رقم التواصل", record.get("phone", ""), max_chars=80)
+            with st.container(key="contact_email_input"):
+                record["email"] = st.text_input("البريد الإلكتروني", record.get("email", ""))
             record["notes"] = st.text_area("الملاحظات", record.get("notes", ""))
         else:
             record["title"] = st.text_input("المسمى أو الدور", record.get("title", ""))
         if st.form_submit_button("حفظ البيانات", type="primary", disabled=not editable):
             def save_directory():
+                if collection == "stakeholders":
+                    display, number = phone_parts(record.get("phone",""))
+                    record["phone"] = number or display
                 store.put(token, collection, record, original.get("version", 1) if original else None)
                 if original is None:
                     st.session_state.pop(draft_key, None)
@@ -206,7 +212,7 @@ def directory_page(store, token, state, actor, collection):
     if st.button("＋ إضافة " + ("مشروع" if collection == "projects" else "جهة أو شخص"), type="primary", disabled=not editable):
         edit_directory(store, token, state, actor, collection)
     search = st.text_input("بحث في " + title)
-    records = [r for r in state[collection] if not search or search.casefold() in (r.get("name", "") + " " + r.get("org", "")).casefold()]
+    records = [r for r in state[collection] if matches_contact(r,search)]
     if not records:
         st.info("لا توجد سجلات في هذا العرض.")
     columns = st.columns(2)
@@ -220,7 +226,16 @@ def directory_page(store, token, state, actor, collection):
                 st.progress(done / len(tasks) if tasks else 0, text=f"{done} من {len(tasks)} مهام مكتملة")
             else:
                 st.caption(record.get("org", ""))
-                st.text(" · ".join(str(record.get(k, "")) for k in ("phone", "email") if record.get(k)))
+                if record.get("phone"):
+                    st.markdown(phone_html(record["phone"]),unsafe_allow_html=True)
+                    number = phone_parts(record["phone"])[1]
+                    if number:
+                        call, whatsapp = st.columns(2)
+                        call.link_button("اتصال", "tel:" + number, width="stretch")
+                        whatsapp.link_button("واتساب", "https://wa.me/" + number[1:], width="stretch")
+                if record.get("email"):
+                    from html import escape
+                    st.markdown('<div class="contact-email" dir="ltr"><bdi dir="ltr">' + escape(str(record["email"])) + '</bdi></div>',unsafe_allow_html=True)
                 if record.get("notes"):
                     st.write(record["notes"])
             if st.button("عرض وتعديل", key="directory_" + record["id"]):

@@ -14,9 +14,14 @@ h1{font-size:2rem!important;font-weight:700!important;letter-spacing:-.6px;}
 h2{font-size:1.4rem!important;}h3{font-size:1.1rem!important;}
 p{line-height:1.75;}[data-testid=stCaptionContainer]{color:var(--muted);}
 header[data-testid=stHeader]{background:transparent;height:2.4rem;}
-/* Hide hosting/source controls while retaining the sidebar's mobile toggle. */
-[data-testid=stToolbar],[data-testid=stToolbarActions],[data-testid=stAppDeployButton],
+/* The toolbar also contains the sidebar opener. Hide source actions only. */
+[data-testid=stToolbarActions],[data-testid=stAppDeployButton],
 #MainMenu,footer{display:none!important;}
+[data-testid=stSidebarCollapseButton]{visibility:visible!important;opacity:1!important;}
+[data-testid=stSidebarCollapseButton] button,[data-testid=stExpandSidebarButton]{min-width:44px;min-height:44px;}
+[data-testid=stExpandSidebarButton]{background:#fff;border:1px solid #dfe4e9;border-radius:10px;color:var(--mint);padding:.35rem .65rem;gap:.35rem;box-shadow:0 2px 9px #1025210c;}
+[data-testid=stExpandSidebarButton]::after{content:'القائمة';font-family:'IBM Plex Sans Arabic',sans-serif;font-size:.85rem;font-weight:600;}
+[data-testid=stSidebarCollapseButton] button:focus-visible,[data-testid=stExpandSidebarButton]:focus-visible{outline:2px solid #35b8a2;outline-offset:2px;}
 .contact-phone,.contact-email{direction:ltr;unicode-bidi:isolate;text-align:right;white-space:nowrap;margin:.6rem 0;}
 .contact-phone bdi,.contact-phone a,.contact-email bdi{direction:ltr;unicode-bidi:isolate;}
 .contact-phone a{color:var(--ink);text-decoration:none;font-weight:600;font-variant-numeric:tabular-nums;}

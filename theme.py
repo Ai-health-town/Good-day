@@ -14,7 +14,9 @@ h1{font-size:2rem!important;font-weight:700!important;letter-spacing:-.6px;}
 h2{font-size:1.4rem!important;}h3{font-size:1.1rem!important;}
 p{line-height:1.75;}[data-testid=stCaptionContainer]{color:var(--muted);}
 header[data-testid=stHeader]{background:transparent;height:2.4rem;}
-[data-testid=stToolbar]{top:.1rem;}#MainMenu,footer{visibility:hidden;}
+/* Hide hosting/source controls while retaining the sidebar's mobile toggle. */
+[data-testid=stToolbar],[data-testid=stToolbarActions],[data-testid=stAppDeployButton],
+#MainMenu,footer{display:none!important;}
 section[data-testid=stSidebar]{direction:rtl;background:linear-gradient(180deg,#291b34,#191321);border:none;min-width:258px;max-width:285px;}
 section[data-testid=stSidebar] h1,section[data-testid=stSidebar] h2,section[data-testid=stSidebar] h3,section[data-testid=stSidebar] p,
 section[data-testid=stSidebar] label,section[data-testid=stSidebar] [data-testid=stCaptionContainer]{color:#d5cedd!important;}

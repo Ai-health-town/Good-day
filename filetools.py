@@ -74,15 +74,31 @@ def parse_upload(filename, raw, project_id):
         if suffix in (".xlsx", ".xlsm"):
             check_archive(raw)
             book = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
-            if len(book.worksheets) > 20:
-                raise WorkspaceError("الحد الأقصى 20 ورقة داخل ملف Excel.")
-            sheets = []
-            for sheet in book.worksheets:
-                if sheet.max_row > 5000 or sheet.max_column > 60:
-                    raise WorkspaceError("الحد الأقصى للتحرير 5000 صف و60 عمودًا لكل ورقة.")
-                rows = [[cell_text(v) for v in r] for r in sheet.iter_rows(values_only=True)]
-                sheets.append({"name": sheet.title, "rows": rows or [[""]]})
-            book.close()
+            try:
+                if not book.worksheets:
+                    raise WorkspaceError("لا يتضمن ملف Excel ورقة بيانات قابلة للقراءة.")
+                if len(book.worksheets) > 20:
+                    raise WorkspaceError("الحد الأقصى 20 ورقة داخل ملف Excel.")
+                sheets = []
+                for sheet in book.worksheets:
+                    # Valid XLSX producers may omit <dimension>, or save stale bounds.
+                    # Read the actual rows, with limits enforced during iteration.
+                    sheet.reset_dimensions()
+                    rows = []
+                    for index, values in enumerate(sheet.iter_rows(values_only=True), 1):
+                        if index > 5000:
+                            raise WorkspaceError("الحد الأقصى للتحرير 5000 صف و60 عمودًا لكل ورقة.")
+                        row = [cell_text(v) for v in values]
+                        while row and row[-1] == "":
+                            row.pop()
+                        if len(row) > 60:
+                            raise WorkspaceError("الحد الأقصى للتحرير 5000 صف و60 عمودًا لكل ورقة.")
+                        rows.append(row or [""])
+                    while rows and all(value == "" for value in rows[-1]):
+                        rows.pop()
+                    sheets.append({"name": sheet.title, "rows": rows or [[""]]})
+            finally:
+                book.close()
             record.update(type="sheet", sheets=sheets)
         elif suffix == ".xls":
             import xlrd

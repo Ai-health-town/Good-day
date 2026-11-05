@@ -65,6 +65,35 @@ def test_excel_import_keeps_formulas_and_formatted_source_bytes(workbook_bytes):
     assert parse_upload("تقرير.xlsm",workbook_bytes,"p_general")["type"] == "sheet"
 
 
+@pytest.mark.parametrize("dimension", [None,"A1:A1","A1:XFD1048576"])
+def test_excel_import_uses_actual_cells_when_sheet_bounds_are_missing_or_wrong(workbook_bytes,dimension):
+    import re
+    archive = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(workbook_bytes)) as source, zipfile.ZipFile(archive,"w",zipfile.ZIP_DEFLATED) as out:
+        for item in source.infolist():
+            raw = source.read(item.filename)
+            if item.filename.startswith("xl/worksheets/") and item.filename.endswith(".xml"):
+                replacement = b"" if dimension is None else ('<dimension ref="'+dimension+'"/>').encode()
+                raw = re.sub(rb"<dimension\b[^>]*/>",replacement,raw)
+            out.writestr(item,raw)
+    raw = archive.getvalue()
+    record = parse_upload("تقرير.xlsx",raw,"p_general")
+    assert record["sheets"][0]["rows"][3] == ["اكتمال البيانات","10000","9750","=C4/B4"]
+    assert record["sheets"][1]["rows"][0][0] == "='التوثيق'!B4-'التوثيق'!C4"
+    import base64
+    assert base64.b64decode(record["blob"]) == raw
+
+
+@pytest.mark.parametrize("address", ["A5001","BI1"])
+def test_excel_import_checks_actual_limits_without_truncating_data(address):
+    book = Workbook()
+    book.active[address] = "خارج الحد"
+    buffer = io.BytesIO()
+    book.save(buffer)
+    with pytest.raises(WorkspaceError,match="5000 صف و60 عمودًا"):
+        parse_upload("حدود.xlsx",buffer.getvalue(),"p_general")
+
+
 def test_excel_working_copy_preserves_styles_formulas_and_other_sheets(workbook_bytes):
     record = parse_upload("تقرير.xlsx",workbook_bytes,"p_general")
     sheets = copy.deepcopy(record["sheets"])

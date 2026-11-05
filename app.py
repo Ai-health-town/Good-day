@@ -551,9 +551,12 @@ def run_app():
         main()
     except WorkspaceError as exc:
         st.error(str(exc))
-    except Exception:
+    except Exception as exc:
         logging.exception("Gday operation failed")
         st.error("تعذر إتمام العملية. تحقق من الاتصال ثم أعد المحاولة. تفاصيل التشغيل متاحة لمالك المنصة في السجلات.")
+        st.caption("رمز التشخيص: " + type(exc).__name__)
+        if st.button("إعادة المحاولة", key="retry_operation"):
+            st.rerun()
 
 
 if __name__ == "__main__":

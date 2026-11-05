@@ -523,6 +523,7 @@ def main():
         state["projects"] = [p for p in full_state["projects"] if p["id"] == project_id]
         for key in ("tasks", "files", "messages"):
             state[key] = [r for r in full_state[key] if r.get("projectId") == project_id]
+        state["stakeholders"] = [r for r in full_state["stakeholders"] if not r.get("projectId") or r["projectId"] == project_id]
     with st.container(key="masthead"):
         heading, search, new, morning, save = st.columns([3.6, .8, 1.15, 1.1, 1])
         heading.caption("G’DAY / " + lookup(full_state["projects"], project_id, "كل مساحة العمل"))

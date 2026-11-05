@@ -408,6 +408,8 @@ class Store:
             if collection in ("projects", "members", "stakeholders"):
                 if not str(record.get("name", "")).strip():
                     raise WorkspaceError("الاسم مطلوب.")
+            if collection == "stakeholders" and record.get("projectId") and not any(p["id"] == record["projectId"] for p in state["projects"]):
+                raise WorkspaceError("اختر مشروعًا موجودًا لجهة الاتصال.")
             if collection == "tasks":
                 if not str(record.get("title", "")).strip():
                     raise WorkspaceError("اكتب عنوان المهمة.")
@@ -436,6 +438,32 @@ class Store:
             self._log(conn, actor, ("تعديل " if old else "إضافة ") + collection, str(record.get("title", record.get("name", record["id"]))))
             return record["id"]
 
+    def move_project_contents(self, token, source_id, target_id, expected_revision):
+        """Reassign existing records atomically, retaining originals and references."""
+        with self.transaction() as conn:
+            actor = self._actor(conn, token)
+            self.require(actor, "edit")
+            state, revision = self._state(conn)
+            if revision != expected_revision:
+                raise Conflict("تغيرت البيانات؛ حدّثها ثم أعد النقل.")
+            projects = {p["id"]: p for p in state["projects"]}
+            if source_id == target_id or source_id not in projects or target_id not in projects:
+                raise WorkspaceError("اختر مشروعين موجودين ومختلفين للنقل.")
+            selected = {name: [r for r in state[name] if r.get("projectId") == source_id or
+                        (name == "stakeholders" and source_id == "p_general" and not r.get("projectId"))]
+                        for name in ("tasks", "files", "stakeholders")}
+            counts = {name: len(records) for name, records in selected.items()}
+            if any(counts.values()):
+                self._snapshot(conn, state, "قبل نقل محتوى المشروع: " + projects[source_id]["name"])
+                at = now_iso()
+                for records in selected.values():
+                    for record in records:
+                        record.update(projectId=target_id, version=record.get("version", 1) + 1,
+                                      updatedAt=at, updatedBy=actor["member_id"])
+                self._save(conn, state, revision)
+                self._log(conn, actor, "نقل محتوى مشروع", dumps({"from": source_id, "to": target_id, **counts}))
+            return counts
+
     def remove(self, token, collection, ident, expected_version):
         if collection not in COLLECTIONS:
             raise WorkspaceError("نوع سجل غير معروف.")
@@ -461,7 +489,7 @@ class Store:
             # Never cascade-delete tasks, files, or conversations by removing a project.
             if collection == "projects":
                 fallback = state["projects"][0]["id"]
-                for name in ("tasks", "files", "messages"):
+                for name in ("tasks", "files", "messages", "stakeholders"):
                     for item in state[name]:
                         if item.get("projectId") == ident:
                             item.update(projectId=fallback, version=item.get("version", 1) + 1)

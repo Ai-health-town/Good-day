@@ -179,6 +179,8 @@ def edit_directory(store, token, state, actor, collection, original=None):
         if collection == "projects":
             record["desc"] = st.text_area("وصف المشروع", record.get("desc", ""))
         elif collection == "stakeholders":
+            default_project = state["projects"][0]["id"] if len(state["projects"]) == 1 else ""
+            record["projectId"] = record_picker("المشروع المرتبط", state["projects"], record.get("projectId", default_project))
             record["org"] = st.text_input("الجهة", record.get("org", ""))
             with st.container(key="contact_phone_input"):
                 record["phone"] = st.text_input("رقم التواصل", record.get("phone", ""), max_chars=80)
@@ -225,6 +227,8 @@ def directory_page(store, token, state, actor, collection):
                 done = sum(t.get("status") == "done" for t in tasks)
                 st.progress(done / len(tasks) if tasks else 0, text=f"{done} من {len(tasks)} مهام مكتملة")
             else:
+                if record.get("projectId"):
+                    st.caption(lookup(state["projects"], record["projectId"]))
                 st.caption(record.get("org", ""))
                 if record.get("phone"):
                     st.markdown(phone_html(record["phone"]),unsafe_allow_html=True)

@@ -26,7 +26,9 @@ header[data-testid=stHeader]{background:transparent;height:2.4rem;}
 .contact-phone bdi,.contact-phone a,.contact-email bdi{direction:ltr;unicode-bidi:isolate;}
 .contact-phone a{color:var(--ink);text-decoration:none;font-weight:600;font-variant-numeric:tabular-nums;}
 .st-key-contact_phone_input input,.st-key-contact_email_input input{direction:ltr!important;unicode-bidi:plaintext!important;text-align:left!important;}
-section[data-testid=stSidebar]{direction:rtl;background:linear-gradient(180deg,#291b34,#191321);border:none;min-width:258px;max-width:285px;}
+section[data-testid=stSidebar]{direction:rtl;background:linear-gradient(180deg,#291b34,#191321);border:none;}
+/* Keep Streamlit's zero-width collapsed state so the content fills the page. */
+section[data-testid=stSidebar][data-collapsed=false]{min-width:min(258px,90vw);max-width:min(285px,90vw);}
 section[data-testid=stSidebar] h1,section[data-testid=stSidebar] h2,section[data-testid=stSidebar] h3,section[data-testid=stSidebar] p,
 section[data-testid=stSidebar] label,section[data-testid=stSidebar] [data-testid=stCaptionContainer]{color:#d5cedd!important;}
 section[data-testid=stSidebar] hr{border-color:#ffffff12;margin:1rem 0;}

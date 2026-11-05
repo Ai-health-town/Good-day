@@ -229,9 +229,11 @@ def directory_page(store, token, state, actor, collection):
 
 @st.dialog("مساحة الملف", width="large")
 def edit_file(store, token, state, actor, original):
+    from preview_ui import original_preview
     record = copy.deepcopy(original)
     editable = store.can_edit(actor)
     st.subheader(record["title"])
+    original_bytes = None
     if record.get("blob") or record.get("object"):
         try:
             original_bytes = store.file_bytes(token, record["id"])
@@ -239,10 +241,20 @@ def edit_file(store, token, state, actor, original):
             st.warning(str(exc))
         else:
             st.download_button("تنزيل الملف الأصلي", original_bytes, file_name=Path(record.get("originalName", record["title"])).name, width="stretch")
-            if record.get("type") == "pdf":
-                st.pdf(original_bytes, height=480, key="pdf_" + record["id"])
     if record.get("legacy") and not (record.get("blob") or record.get("object")):
         st.info("هذا المحتوى من النسخة السابقة. النسخة السابقة حفظت نصوصًا وجداول فقط؛ يتوفر هنا المحتوى المحفوظ فيها.")
+    modes = (["معاينة الأصل"] if original_bytes else []) + ["نسخة العمل","التعليقات"]
+    mode = st.segmented_control("مساحة الملف",modes,default=modes[0],selection_mode="single",
+                                key="file_mode_" + record["id"],width="stretch",label_visibility="collapsed") or modes[0]
+    if mode == "معاينة الأصل":
+        original_preview(original,original_bytes)
+    elif mode == "نسخة العمل":
+        file_working_copy(store,token,state,actor,original,record,editable,original_bytes)
+    else:
+        file_comments(store,token,state,actor,original,editable)
+
+
+def file_working_copy(store,token,state,actor,original,record,editable,original_bytes):
     title = st.text_input("اسم الملف", record["title"], disabled=not editable)
     project = record_picker("مشروع الملف", state["projects"], record.get("projectId"), empty=False)
     star = st.checkbox("تمييز الملف", value=bool(record.get("starred")), disabled=not editable)
@@ -253,13 +265,27 @@ def edit_file(store, token, state, actor, original):
         rows = sheets[selected]["rows"] or [[""]]
         width = max(1, max(len(r) for r in rows))
         frame = pd.DataFrame([list(map(str, r)) + [""] * (width - len(r)) for r in rows], columns=[f"عمود {n+1}" for n in range(width)])
-        edited = st.data_editor(frame, hide_index=True, num_rows="dynamic", width="stretch", disabled=not editable, key="file_grid_" + record["id"] + "_" + str(selected))
+        original_excel = bool(original_bytes and Path(original.get("originalName","")).suffix.lower() in (".xlsx",".xlsm"))
+        if original_excel:
+            from openpyxl.utils import get_column_letter
+            frame.columns = [get_column_letter(n+1) for n in range(width)]
+            frame.index = range(1,len(frame)+1)
+        edited = st.data_editor(frame, hide_index=not original_excel, num_rows="fixed" if original_excel else "dynamic", width="stretch", disabled=not editable, key="file_grid_" + record["id"] + "_" + str(selected))
         sheets[selected]["rows"] = edited.fillna("").astype(str).values.tolist()
         record["sheets"] = sheets
         record.pop("sheetData", None)
-        st.caption("الصف الأول جزء من البيانات وقابل للتعديل. تصدير النسخة المحررة يحفظ القيم كنصوص؛ الملف الأصلي متاح أعلاه كما رُفع.")
-        st.download_button("تنزيل الجدول المحرر — Excel", sheet_bytes(sheets), Path(title).stem + "_edited.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        if editable:
+        if original_excel:
+            from sheet_preview import edited_excel
+            st.caption("الصف الأول جزء من البيانات. يمكنك كتابة صيغ Excel مثل =SUM(B2:B8). التصدير يطبّق تغييرات الخلايا مع إبقاء التنسيق والصيغ والأوراق الأخرى؛ الأصل يبقى محفوظًا.")
+            try:
+                exported = edited_excel(original_bytes,sheets)
+                st.download_button("تنزيل نسخة التعديلات — Excel",exported,Path(title).stem + "_edited.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            except WorkspaceError as exc:
+                st.warning(str(exc))
+        else:
+            st.caption("نسخة عمل بالقيم النصية. الأصل يحتفظ بتنسيقه وصيغه، وتُعرض نتائجه في معاينة الأصل.")
+            st.download_button("تنزيل الجدول المحرر — Excel", sheet_bytes(sheets), Path(title).stem + "_edited.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        if editable and not original_excel:
             new_column = st.text_input("عمود جديد — اختياري", key="new_column_" + record["id"])
             if st.button("إضافة العمود", disabled=not new_column.strip()):
                 for index, row in enumerate(sheets[selected]["rows"]):
@@ -280,6 +306,9 @@ def edit_file(store, token, state, actor, original):
             st.error("اسم الملف مطلوب.")
         else:
             perform(lambda: store.put(token, "files", record, original.get("version", 1)), "حُفظت تعديلات الملف")
+
+
+def file_comments(store,token,state,actor,original,editable):
     st.markdown("**تعليقات الفريق**")
     for comment in original.get("comments", []):
         st.caption(lookup(state["members"], comment.get("authorId")) + " · " + str(comment.get("time", "")))

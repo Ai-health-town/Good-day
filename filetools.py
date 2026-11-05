@@ -12,6 +12,7 @@ from pathlib import Path
 
 from docx import Document
 from docx.oxml import OxmlElement
+from docx.table import Table
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -70,9 +71,9 @@ def parse_upload(filename, raw, project_id):
               "comments": [], "blob": base64.b64encode(raw).decode(), "originalName": Path(filename).name,
               "size": len(raw), "updatedAt": now_iso(), "legacy": False}
     try:
-        if suffix == ".xlsx":
+        if suffix in (".xlsx", ".xlsm"):
             check_archive(raw)
-            book = load_workbook(io.BytesIO(raw), read_only=True, data_only=False)
+            book = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
             if len(book.worksheets) > 20:
                 raise WorkspaceError("الحد الأقصى 20 ورقة داخل ملف Excel.")
             sheets = []
@@ -83,18 +84,48 @@ def parse_upload(filename, raw, project_id):
                 sheets.append({"name": sheet.title, "rows": rows or [[""]]})
             book.close()
             record.update(type="sheet", sheets=sheets)
-        elif suffix == ".csv":
-            text = raw.decode("utf-8-sig")
-            rows = list(csv.reader(io.StringIO(text)))
+        elif suffix == ".xls":
+            import xlrd
+            book = xlrd.open_workbook(file_contents=raw, on_demand=True)
+            try:
+                if book.nsheets > 20:
+                    raise WorkspaceError("الحد الأقصى 20 ورقة داخل ملف Excel.")
+                sheets = []
+                for sheet in book.sheets():
+                    if sheet.nrows > 5000 or sheet.ncols > 60:
+                        raise WorkspaceError("الحد الأقصى للتحرير 5000 صف و60 عمودًا لكل ورقة.")
+                    rows = []
+                    for r in range(sheet.nrows):
+                        row = []
+                        for c in range(sheet.ncols):
+                            cell = sheet.cell(r,c)
+                            value = xlrd.xldate_as_datetime(cell.value,book.datemode) if cell.ctype == xlrd.XL_CELL_DATE else cell.value
+                            if isinstance(value,float) and value.is_integer(): value = int(value)
+                            row.append(cell_text(value))
+                        rows.append(row)
+                    sheets.append({"name":sheet.name,"rows":rows or [[""]]})
+                record.update(type="sheet",sheets=sheets)
+            finally:
+                book.release_resources()
+        elif suffix in (".csv", ".tsv"):
+            text = raw.decode("utf-16") if raw.startswith((b"\xff\xfe",b"\xfe\xff")) else raw.decode("utf-8-sig")
+            try:
+                dialect = csv.Sniffer().sniff(text[:8192],delimiters=",;\t")
+            except csv.Error:
+                dialect = csv.excel_tab if suffix == ".tsv" else csv.excel
+            rows = list(csv.reader(io.StringIO(text),dialect))
             if len(rows) > 5000 or any(len(r) > 60 for r in rows):
                 raise WorkspaceError("الحد الأقصى 5000 صف و60 عمودًا.")
             record.update(type="sheet", sheets=[{"name": "البيانات", "rows": rows or [[""]]}])
         elif suffix == ".docx":
             check_archive(raw)
             document = Document(io.BytesIO(raw))
-            paragraphs = [p.text for p in document.paragraphs]
-            for table in document.tables:
-                paragraphs.extend(" | ".join(c.text for c in row.cells) for row in table.rows)
+            paragraphs = []
+            for part in document.iter_inner_content():
+                if isinstance(part,Table):
+                    paragraphs.extend(" | ".join(c.text for c in row.cells) for row in part.rows)
+                else:
+                    paragraphs.append(part.text)
             record.update(type="doc", text="\n".join(paragraphs))
         elif suffix in (".txt", ".md", ".html", ".gdoc"):
             text = raw.decode("utf-8-sig")
@@ -104,7 +135,7 @@ def parse_upload(filename, raw, project_id):
                 raise WorkspaceError("الملف ليس PDF صالحًا.")
             record.update(type="pdf", text="")
         else:
-            raise WorkspaceError("الصيغ المدعومة: DOCX وXLSX وCSV وPDF وTXT وMD وHTML. حوّل ملفات DOC/XLS القديمة أولًا.")
+            raise WorkspaceError("الصيغ المدعومة: DOCX وXLSX وXLSM وXLS وCSV وTSV وPDF وTXT وMD وHTML. حوّل ملفات DOC القديمة إلى DOCX أولًا.")
     except WorkspaceError:
         raise
     except Exception:
@@ -149,7 +180,7 @@ def sheet_bytes(sheets):
         sheet.sheet_view.rightToLeft = True
         for row in item["rows"]:
             # Literal text avoids turning chat/imported content into spreadsheet formulas.
-            sheet.append([str(value or "") for value in row])
+            sheet.append([str("" if value is None else value) for value in row])
             for cell in sheet[sheet.max_row]:
                 cell.data_type = "s"
                 cell.alignment = Alignment(horizontal="right", vertical="top", wrap_text=True)

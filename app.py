@@ -141,7 +141,7 @@ def upload_dialog(store, token, state):
     generation = st.session_state.get("upload_generation", 0)
     with st.form("upload_batch_" + str(generation)):
         project = record_picker("المشروع", state["projects"], empty=False)
-        uploaded = st.file_uploader("المستندات والجداول والمرفقات", type=["docx", "xlsx", "csv", "pdf", "txt", "md", "html"], accept_multiple_files=True, key="uploads_" + str(generation))
+        uploaded = st.file_uploader("المستندات والجداول والمرفقات", type=["docx", "xlsx", "xlsm", "xls", "csv", "tsv", "pdf", "txt", "md", "html"], accept_multiple_files=True, key="uploads_" + str(generation))
         st.caption("حتى 8 ميجابايت للملف. يحفظ النظام الأصل كما رُفع، مع نسخة قابلة للتحرير للمستندات والجداول.")
         submit = st.form_submit_button("حفظ الملفات في المكتبة", type="primary", width="stretch")
     if submit:
@@ -351,7 +351,11 @@ def files_page(store, token, state, actor):
     starred = favorite.checkbox("المميزة فقط")
     wanted = {"مستندات": "doc", "جداول": "sheet", "PDF": "pdf"}.get(selected_type)
     records = sorted([f for f in state["files"] if (not query or query.casefold() in f["title"].casefold()) and (not wanted or f.get("type") == wanted) and (not starred or f.get("starred"))], key=lambda f: str(f.get("updatedAt", "")), reverse=True)
-    if not records: empty("المعرفة تبدأ بملف", "ارفع مستندًا أو جدولًا، أو أنشئ ملفًا جديدًا هنا.")
+    if not records:
+        empty("المعرفة تبدأ بملف", "ارفع مستندًا أو جدولًا، أو أنشئ ملفًا جديدًا هنا.")
+        if st.button("تجربة عارض Excel"):
+            from preview_ui import excel_example
+            excel_example()
     grid = st.columns(2)
     for index, record in enumerate(records):
         with grid[index % 2], st.container(border=True):

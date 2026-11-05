@@ -1,0 +1,7 @@
+libreoffice-writer
+libreoffice-calc
+fonts-dejavu-core
+fonts-liberation
+fonts-noto-core
+fonts-crosextra-carlito
+fonts-crosextra-caladea

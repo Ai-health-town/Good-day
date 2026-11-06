@@ -520,6 +520,8 @@ def main():
         for key in ("tasks", "files", "messages"):
             state[key] = [r for r in full_state[key] if r.get("projectId") == project_id]
         state["stakeholders"] = [r for r in full_state["stakeholders"] if not r.get("projectId") or r["projectId"] == project_id]
+    from workspace_clock import render_clock
+    render_clock()
     with st.container(key="masthead"):
         heading, search, new, morning, save = st.columns([3.6, .8, 1.15, 1.1, 1])
         heading.caption("G’DAY / " + lookup(full_state["projects"], project_id, "كل مساحة العمل"))

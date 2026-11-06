@@ -499,7 +499,9 @@ def main():
         st.caption("مساحة واحدة. فريق متصل.")
         st.divider()
         st.markdown('<div class="section-label">WORKSPACE / مساحة العمل</div>', unsafe_allow_html=True)
-        pages = PAGES + (["الأعضاء", "الربط والتخزين"] if actor["role"] == "admin" else []) + (["سجل النشاط"] if actor["role"] in ("admin", "manager") else [])
+        pages = PAGES + (["الأعضاء", "الربط والتخزين", "سجل النشاط"] if actor["role"] == "admin" else [])
+        if st.session_state.get("navigation") not in pages:
+            st.session_state["navigation"] = PAGES[0]
         page = st.radio("القائمة الرئيسية", pages, key="navigation", label_visibility="collapsed")
         st.divider()
         st.markdown('<div class="section-label">PROJECTS / المشاريع</div>', unsafe_allow_html=True)

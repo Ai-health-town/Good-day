@@ -806,7 +806,7 @@ class Store:
 
     def activity(self, token, limit=150):
         with self.engine.connect() as conn:
-            self.require(self._actor(conn, token), "manage")
+            self.require(self._actor(conn, token), "admin")
             return [dict(x) for x in conn.execute(select(audit).order_by(audit.c.at.desc()).limit(limit)).mappings()]
 
 

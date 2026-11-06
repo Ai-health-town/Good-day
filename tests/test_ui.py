@@ -13,6 +13,36 @@ def healthy(app):
     assert not list(app.error), [x.value for x in app.error]
 
 
+@pytest.mark.parametrize("role", ["admin", "manager", "member", "viewer", "agent"])
+def test_activity_navigation_is_admin_only_and_clears_old_selection(tmp_path, monkeypatch, role):
+    from workspace import Store
+    url = "sqlite:///" + str(tmp_path / "activity_navigation.db")
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("GDAY_LOCAL_MODE", "true")
+    store = Store(url)
+    password = "QA-activity-password-925!"
+    store.bootstrap("owner", password)
+    owner = store.login("owner", password)
+    token = owner
+    if role != "admin":
+        store.create_user(owner, "activity_user", "عضو الاختبار", password, role, agent_edit=role == "agent")
+        token = store.login("activity_user", password)
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+    app.session_state["token"] = token
+    app.session_state["navigation"] = "سجل النشاط"
+    app.run()
+    healthy(app)
+    navigation = app.radio(key="navigation")
+    assert ("سجل النشاط" in navigation.options) == (role == "admin")
+    assert navigation.value == ("سجل النشاط" if role == "admin" else "نظرة اليوم")
+    if role != "admin":
+        app.session_state["navigate_to"] = "سجل النشاط"
+        app.run()
+        healthy(app)
+        assert app.radio(key="navigation").value == "نظرة اليوم"
+        assert not any(h.value == "سجل النشاط" for h in app.subheader)
+
+
 def test_native_streamlit_member_workflow(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite:///" + str(tmp_path / "ui.db"))
     monkeypatch.setenv("GDAY_LOCAL_MODE", "true")

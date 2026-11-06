@@ -5,6 +5,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from datetime import datetime, time, timezone
 from pathlib import Path
 
@@ -149,6 +150,24 @@ def test_reminder_titles_are_escaped_before_becoming_client_data():
     html = reminders_html({"tasks": [value]}, {"id": "user", "member_id": "me"})
     assert '<img src=x' not in html and "\\u003c/script\\u003e" in html
     assert html.count("</script>") == 1
+
+
+def test_both_clock_and_audio_initializers_are_top_level_html(monkeypatch):
+    import workspace_clock
+    captured = []
+    monkeypatch.setattr(workspace_clock.st, "html", lambda body, **kw: captured.append(body))
+    workspace_clock.render_clock(reminders_html({"tasks": []}, {"id": "me", "member_id": "me"}))
+    class Scripts(HTMLParser):
+        def __init__(self): super().__init__(); self.stack = []; self.depths = []
+        def handle_starttag(self, tag, attrs):
+            if tag == "script": self.depths.append(len(self.stack))
+            self.stack.append(tag)
+        def handle_endtag(self, tag):
+            if tag in self.stack:
+                self.stack = self.stack[:len(self.stack)-1-self.stack[::-1].index(tag)]
+    parser = Scripts()
+    parser.feed(captured[0])
+    assert parser.depths == [0, 0]
 
 
 def test_client_requires_a_gesture_and_rings_once_then_cancels_on_completion(tmp_path):

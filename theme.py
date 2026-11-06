@@ -46,6 +46,7 @@ button[kind=primary],button[kind=primaryFormSubmit]{background:var(--mint);borde
 button[kind=primary]:hover,button[kind=primaryFormSubmit]:hover{background:#096b65;color:white;border-color:#096b65;}
 [data-testid=stTextInput] input,[data-testid=stTextArea] textarea{text-align:right;}
 [data-testid=stTextArea] textarea{line-height:1.8;}
+[data-testid=stTimeInput] [role=group]{direction:ltr;unicode-bidi:isolate;}
 [data-testid=stTextInput]>div,[data-testid=stSelectbox]>div>div{border-radius:10px;}
 [data-testid=stForm]{background:white;border:1px solid var(--line);border-radius:16px;padding:1.1rem;}
 [data-testid=stExpander]{background:white;border-radius:14px;border-color:var(--line);}

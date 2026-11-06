@@ -2,10 +2,11 @@
 import json
 
 import streamlit as st
+from streamlit.components.v2 import component
 
 from task_schedule import reminder_items
 from workspace import Forbidden
-from workspace_clock import render_clock
+from workspace_clock import CLOCK, render_clock
 
 REMINDERS = """
 <style>
@@ -119,6 +120,29 @@ def reminders_html(state, actor):
     return REMINDERS.replace("__REMINDER_DATA__", payload)
 
 
+# Register static trusted assets once. Task titles travel only as component data
+# and are displayed with textContent, never interpolated into executable assets.
+_clock_markup, _, _clock_script = CLOCK.partition("<script>")
+_reminder_markup, _, _reminder_script = REMINDERS.partition("<script>")
+_task_header = component(
+    "gday_task_schedule_header",
+    html=_clock_markup.replace("<!--TASK_REMINDERS-->", _reminder_markup),
+    js="export default function(component) {\nconst payload = component.data;\n"
+    + _clock_script.rsplit("</script>", 1)[0].replace(
+        "document.getElementById('gday-workspace-clock')",
+        "component.parentElement.querySelector('#gday-workspace-clock')",
+    )
+    + _reminder_script.rsplit("</script>", 1)[0].replace(
+        " const payload = __REMINDER_DATA__;", ""
+    ).replace(
+        "document.getElementById('gday-task-reminders')",
+        "component.parentElement.querySelector('#gday-task-reminders')",
+    )
+    + "\n}",
+    isolate_styles=False,
+)
+
+
 def render_task_header(store, token, initial_state, actor):
     initial = [(initial_state, actor)]
 
@@ -133,6 +157,10 @@ def render_task_header(store, token, initial_state, actor):
                 render_clock()
                 st.warning("انتهت جلسة التنبيهات؛ حدّث الصفحة لتسجيل الدخول.")
                 return
-        render_clock(reminders_html(state, current))
+        _task_header(
+            data={"account": current["id"], "items": reminder_items(state, current)},
+            key="gday_task_schedule_header",
+            width="stretch",
+        )
 
     header()

@@ -171,6 +171,22 @@ def test_clock_and_audio_share_a_single_top_level_initializer(monkeypatch):
     assert "gdayTaskReminders" in captured[0] and "gdayTimer" in captured[0]
 
 
+def test_component_sends_reminder_data_without_embedding_titles_in_code(monkeypatch):
+    import task_reminders
+    from datetime import timedelta
+    captures = []
+    monkeypatch.setattr(task_reminders, "_task_header", lambda **kwargs: captures.append(kwargs))
+    monkeypatch.setattr(task_reminders.st, "fragment", lambda **kwargs: lambda fn: fn)
+    now = datetime.now(RIYADH) + timedelta(hours=1)
+    title = '</script><img src=x onerror="alert(1)">'
+    value = scheduled(title=title, assigneeId="me", dueDate=now.date().isoformat(), dueTime=now.strftime("%H:%M"))
+    actor = {"id": "account", "member_id": "me"}
+    # The initial render uses the already authenticated snapshot, without a query.
+    task_reminders.render_task_header(None, "unused", {"tasks": [value]}, actor)
+    assert captures[0]["data"]["items"][0]["title"] == title
+    assert captures[0]["data"]["account"] == "account"
+
+
 def test_client_requires_a_gesture_and_rings_once_then_cancels_on_completion(tmp_path):
     node = shutil.which("node")
     if not node: pytest.skip("Node is unavailable for the browser-independent audio contract")

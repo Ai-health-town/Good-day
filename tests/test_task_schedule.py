@@ -152,7 +152,7 @@ def test_reminder_titles_are_escaped_before_becoming_client_data():
     assert html.count("</script>") == 1
 
 
-def test_both_clock_and_audio_initializers_are_top_level_html(monkeypatch):
+def test_clock_and_audio_share_a_single_top_level_initializer(monkeypatch):
     import workspace_clock
     captured = []
     monkeypatch.setattr(workspace_clock.st, "html", lambda body, **kw: captured.append(body))
@@ -167,7 +167,8 @@ def test_both_clock_and_audio_initializers_are_top_level_html(monkeypatch):
                 self.stack = self.stack[:len(self.stack)-1-self.stack[::-1].index(tag)]
     parser = Scripts()
     parser.feed(captured[0])
-    assert parser.depths == [0, 0]
+    assert parser.depths == [0]
+    assert "gdayTaskReminders" in captured[0] and "gdayTimer" in captured[0]
 
 
 def test_client_requires_a_gesture_and_rings_once_then_cancels_on_completion(tmp_path):

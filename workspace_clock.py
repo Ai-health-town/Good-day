@@ -105,7 +105,8 @@ def render_clock(reminders_html=""):
     # Reminder titles are safely JSON-escaped by task_reminders and displayed
     # with textContent. No credentials are passed to either component.
     markup, separator, script = reminders_html.partition("<script>")
-    # Streamlit executes top-level scripts; nested scripts are sanitized away.
-    # Keep the controls in the header and their trusted initializer outside it.
-    initializer = "<script>" + script if separator else ""
-    st.html(CLOCK.replace("<!--TASK_REMINDERS-->", markup) + initializer, unsafe_allow_javascript=True)
+    # Keep the clock and audio setup in one initializer so both share the
+    # lifecycle of this HTML element across fragment and page refreshes.
+    initializer = script.rsplit("</script>", 1)[0] if separator else ""
+    body = CLOCK.replace("<!--TASK_REMINDERS-->", markup)
+    st.html(body.replace("</script>", initializer + "\n</script>"), unsafe_allow_javascript=True)

@@ -9,7 +9,7 @@ from dataclasses import replace
 import streamlit as st
 from sqlalchemy import select
 
-from ai_service import AIConfig
+from ai_service import AIConfig, NeonAI
 from ai_store import threads
 from assistant_desk import ACTIVE, AssistantDesk, DeskWorker
 from components import edit_file, edit_task, lookup
@@ -20,7 +20,7 @@ from workspace import WorkspaceError, uid, ZONE
 @st.cache_resource
 def resources(identity, _store, _config):
     desk = AssistantDesk(_store)
-    return desk, DeskWorker(desk, _config)
+    return desk, DeskWorker(desk, _config, client_factory=NeonAI)
 
 
 def _render_request(desk, worker, store, token, job):
@@ -76,7 +76,7 @@ def help_center(store, token, state, actor, setting):
     if config:
         config = replace(config, model=str(setting("GDAY_ASSISTANT_MODEL", "gpt-6-luna")), output_tokens=min(2400, config.output_tokens))
     fingerprint = hashlib.sha256((config.base_url + config.token + config.model + str(config.output_tokens)).encode()).hexdigest() if config else "unconfigured"
-    desk, worker = resources(str(id(store)) + ":" + str(id(AssistantDesk)) + ":" + fingerprint, store, config)
+    desk, worker = resources(str(id(store)) + ":" + str(id(AssistantDesk)) + ":" + str(id(NeonAI)) + ":" + fingerprint, store, config)
     projects = state["projects"]
     if not projects:
         st.info("أضف مشروعًا أولًا ليعمل المساعد على سياقه.")

@@ -267,11 +267,36 @@ def test_inference_check_requires_an_actual_bounded_reply_without_team_data():
     cfg = AIConfig("https://br-test.ai.c-2.eu-central-1.aws.neon.tech", "test-secret", "configured-model")
     NeonAI(cfg, httpx.MockTransport(handle)).check_inference()
     assert len(captured) == 1
-    assert captured[0]["max_tokens"] == 32 and "tools" not in captured[0]
+    assert captured[0]["max_tokens"] == 32 and captured[0]["tools"]
+    assert captured[0]["tool_choice"] == "none"
     assert captured[0]["messages"] == [{"role": "user", "content": "Reply with the word READY only."}]
     bad = httpx.MockTransport(lambda _: httpx.Response(200, json={"choices": []}))
     with pytest.raises(WorkspaceError, match="دون إجابة اختبارية"):
         NeonAI(cfg, bad).check_inference()
+
+
+@pytest.mark.parametrize("allow_actions", [True, False])
+def test_luna_uses_the_gateway_fast_mode_with_execution_tools(allow_actions):
+    from assistant_desk import DESK_TOOL, SYSTEM
+    captured = []
+    def gateway(request):
+        payload = json.loads(request.content)
+        captured.append(payload)
+        # Reproduce the actual upstream rejection observed in production.
+        if payload.get("tools") and payload.get("reasoning_effort") != "none":
+            return httpx.Response(400, json={"error_code": "BAD_REQUEST", "message":
+                "Function tools with reasoning_effort are not supported for gpt-6-luna in /v1/chat/completions. "
+                "To use function tools, use /v1/responses or set reasoning_effort to 'none'."})
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": "READY"}}]})
+    cfg = AIConfig("https://br-test.ai.c-2.eu-central-1.aws.neon.tech", "test-secret", "gpt-6-luna")
+    client = NeonAI(cfg, httpx.MockTransport(gateway))
+    answer, actions, _ = client.answer("اختبار", {}, [], allow_actions, system=SYSTEM, tool=DESK_TOOL)
+    assert answer == "READY" and actions == []
+    assert captured[0]["reasoning_effort"] == "none"
+    assert bool(captured[0].get("tools")) == allow_actions
+    client.check_inference()
+    assert captured[1]["reasoning_effort"] == "none" and captured[1]["tools"]
+    assert captured[1]["tool_choice"] == "none" and captured[1]["max_tokens"] == 32
 
 
 def test_connection_page_keeps_diagnostics_and_hides_completed_setup(tmp_path, monkeypatch):

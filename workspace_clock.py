@@ -8,7 +8,9 @@ CLOCK = """
 .gday-timebar{display:flex;justify-content:flex-start;direction:rtl;width:100%;padding:0 0 10px;}
 .gday-clock{display:flex;align-items:center;gap:18px;max-width:100%;padding:14px 19px;border:1px solid #e1e8e8;border-radius:16px;background:linear-gradient(115deg,#fff 35%,#eff8f5 100%);box-shadow:0 3px 14px #203c3505;font-family:'IBM Plex Sans Arabic',sans-serif;color:#203840;}
 .gday-clock-symbol{display:grid;place-items:center;width:39px;height:39px;flex:none;border-radius:12px;background:#e2f2ec;color:#13897b;}
-.gday-clock-symbol svg{width:22px;height:22px;}
+.gday-clock-glyph{position:relative;display:block;width:21px;height:21px;border:1.7px solid currentColor;border-radius:50%;}
+.gday-clock-glyph::before{content:'';position:absolute;left:8px;top:3px;width:1.5px;height:6px;background:currentColor;border-radius:2px;}
+.gday-clock-glyph::after{content:'';position:absolute;left:8px;top:8px;width:6px;height:1.5px;background:currentColor;border-radius:2px;transform:rotate(35deg);transform-origin:left center;}
 .gday-clock-digital{min-width:112px;text-align:center;}
 .gday-clock-time{display:flex;align-items:baseline;justify-content:center;direction:ltr;unicode-bidi:isolate;white-space:nowrap;font-variant-numeric:tabular-nums;line-height:1.2;}
 .gday-clock-hm{font-size:27px;font-weight:700;letter-spacing:-.6px;}
@@ -29,7 +31,7 @@ CLOCK = """
 <div class="gday-timebar">
   <section id="gday-workspace-clock" class="gday-clock" dir="rtl" aria-label="الوقت والتاريخ بتوقيت الرياض">
     <div class="gday-clock-symbol" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      <span class="gday-clock-glyph"></span>
     </div>
     <div class="gday-clock-digital">
       <time class="gday-clock-time" aria-live="off" dir="ltr"><span class="gday-clock-hm">—:—</span><span class="gday-clock-seconds"></span><span class="gday-clock-period"></span></time>

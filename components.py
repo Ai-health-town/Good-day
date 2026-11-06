@@ -2,12 +2,13 @@
 import base64
 import copy
 import json
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
 from contacttools import phone_parts, phone_html, matches_contact
+from task_schedule import REMINDER_OPTIONS
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
 COOKIE = "gday_session_v2"
 
@@ -115,16 +116,23 @@ def edit_task(store, token, state, actor, original=None):
             project = record_picker("المشروع", state["projects"], task.get("projectId"), empty=False)
             status = enum_picker("حالة المهمة", STATUSES, task.get("status"))
             due = st.date_input("موعد المهمة", value=date.fromisoformat(task["dueDate"]) if task.get("dueDate") else None)
+            due_time = st.time_input("وقت الاستحقاق — بتوقيت الرياض", value=time.fromisoformat(task["dueTime"]) if task.get("dueTime") else None, step=60, disabled=not editable)
         with b:
             assignee = record_picker("المسؤول عن المهمة", state["members"], task.get("assigneeId"))
             priority = enum_picker("أولوية المهمة", PRIORITIES, task.get("priority"))
             minutes = st.number_input("الوقت المتوقع بالدقائق", 0, 100000, min(100000, max(0, int(task.get("estimatedMinutes") or 30))), step=15)
+        reminder, before = st.columns(2)
+        reminder_enabled = reminder.checkbox("تنبيه صوتي للمهمة", value=task.get("reminderEnabled", False), disabled=not editable)
+        reminder_minutes = before.selectbox("التنبيه قبل", list(REMINDER_OPTIONS), index=list(REMINDER_OPTIONS).index(task.get("reminderMinutes", 15)), format_func=REMINDER_OPTIONS.get, disabled=not editable)
+        st.caption("التنبيه للمسؤول عن المهمة؛ وإن لم تُسند، لمن أنشأها. فعّل الصوت من أعلى الصفحة واترك المنصة مفتوحة؛ قد يؤخر المتصفح التنبيه في الخلفية.")
         stakeholder = record_picker("شخص أو جهة التواصل", state["stakeholders"], task.get("stakeholderId", ""))
         file_id = record_picker("ملف مرتبط بالمهمة", state["files"], task.get("attachedFileId", ""))
         notes = st.text_area("ملاحظات المهمة", task.get("notes", ""), height=100)
         if st.form_submit_button("حفظ المهمة", type="primary", disabled=not editable, width="stretch"):
             task.update(title=title.strip(), projectId=project, assigneeId=assignee, status=status, priority=priority,
-                        dueDate=due.isoformat() if due else "", estimatedMinutes=minutes, notes=notes, stakeholderId=stakeholder, attachedFileId=file_id)
+                        dueDate=due.isoformat() if due else "", dueTime=due_time.strftime("%H:%M") if due_time else "",
+                        reminderEnabled=reminder_enabled, reminderMinutes=reminder_minutes,
+                        estimatedMinutes=minutes, notes=notes, stakeholderId=stakeholder, attachedFileId=file_id)
             def save_task():
                 store.put(token, "tasks", task, original.get("version", 1) if original else None)
                 if original is None:

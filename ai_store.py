@@ -9,7 +9,7 @@ from datetime import date
 from sqlalchemy import (Column, Float, Integer, MetaData, String, Table, Text,
                         delete, func, insert, select, update)
 
-from workspace import WorkspaceError, Forbidden, Conflict, STATUSES, PRIORITIES, now_iso, uid, dumps
+from workspace import WorkspaceError, Forbidden, Conflict, STATUSES, PRIORITIES, now_iso, uid, dumps, validate_task_schedule
 
 metadata = MetaData()
 threads = Table("gday_ai_threads", metadata, Column("id", String(64), primary_key=True),
@@ -51,7 +51,7 @@ def normalize_actions(raw, state, project_id, guards):
         values = copy.deepcopy(values)
         target, version = "", None
         if kind in ("task_create", "task_update"):
-            allowed = {"title", "notes", "assigneeId", "status", "priority", "dueDate", "estimatedMinutes"}
+            allowed = {"title", "notes", "assigneeId", "status", "priority", "dueDate", "dueTime", "reminderEnabled", "reminderMinutes", "estimatedMinutes"}
             if set(values) - allowed:
                 raise WorkspaceError("حقول المهمة المقترحة غير مسموحة.")
             if kind == "task_create":
@@ -81,6 +81,7 @@ def normalize_actions(raw, state, project_id, guards):
                     raise WorkspaceError("موعد المهمة المقترح غير صالح.") from None
             if "estimatedMinutes" in values and (type(values["estimatedMinutes"]) is not int or not 0 <= values["estimatedMinutes"] <= 100000):
                 raise WorkspaceError("وقت المهمة المقترح غير صالح.")
+            validate_task_schedule((task_index[target] if kind == "task_update" else {}) | values)
         elif kind == "document_create":
             if set(values) != {"title", "text"}:
                 raise WorkspaceError("المستند المقترح يحتاج عنوانًا ونصًا فقط.")

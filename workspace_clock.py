@@ -5,7 +5,7 @@ import streamlit as st
 
 CLOCK = """
 <style>
-.gday-timebar{display:flex;justify-content:flex-start;direction:rtl;width:100%;padding:0 0 10px;}
+.gday-timebar{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;direction:rtl;width:100%;padding:0 0 10px;}
 .gday-clock{display:flex;align-items:center;gap:18px;max-width:100%;padding:14px 19px;border:1px solid #e1e8e8;border-radius:16px;background:linear-gradient(115deg,#fff 35%,#eff8f5 100%);box-shadow:0 3px 14px #203c3505;font-family:'IBM Plex Sans Arabic',sans-serif;color:#203840;}
 .gday-clock-symbol{display:grid;place-items:center;width:39px;height:39px;flex:none;border-radius:12px;background:#e2f2ec;color:#13897b;}
 .gday-clock-glyph{position:relative;display:block;width:21px;height:21px;border:1.7px solid currentColor;border-radius:50%;}
@@ -47,6 +47,7 @@ CLOCK = """
       </div>
     </div>
   </section>
+  <!--TASK_REMINDERS-->
 </div>
 <script>
 (() => {
@@ -100,6 +101,7 @@ CLOCK = """
 """
 
 
-def render_clock():
-    # This is constant application code; no member input or credentials enter it.
-    st.html(CLOCK, unsafe_allow_javascript=True)
+def render_clock(reminders_html=""):
+    # Reminder titles are safely JSON-escaped by task_reminders and displayed
+    # with textContent. No credentials are passed to either component.
+    st.html(CLOCK.replace("<!--TASK_REMINDERS-->", reminders_html), unsafe_allow_javascript=True)

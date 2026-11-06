@@ -214,9 +214,10 @@ def sheet_bytes(sheets):
 
 def tasks_excel(state):
     names = {x["id"]: x.get("name", "") for key in ("members", "projects", "stakeholders") for x in state[key]}
-    rows = [["المهمة", "المشروع", "المسؤول", "الحالة", "الأولوية", "تاريخ الاستحقاق", "الوقت المتوقع (دقيقة)", "جهة التواصل", "الملاحظات"]]
+    rows = [["المهمة", "المشروع", "المسؤول", "الحالة", "الأولوية", "تاريخ الاستحقاق", "وقت الاستحقاق (الرياض)", "التنبيه قبل (دقيقة)", "الوقت المتوقع (دقيقة)", "جهة التواصل", "الملاحظات"]]
     for task in state["tasks"]:
         rows.append([task.get("title", ""), names.get(task.get("projectId"), ""), names.get(task.get("assigneeId"), "غير معين"),
                      STATUSES.get(task.get("status"), ""), PRIORITIES.get(task.get("priority"), ""), task.get("dueDate", ""),
+                     task.get("dueTime", ""), task.get("reminderMinutes", 15) if task.get("reminderEnabled") else "غير مفعّل",
                      task.get("estimatedMinutes", 30), names.get(task.get("stakeholderId"), ""), task.get("notes", "")])
     return sheet_bytes([{"name": "المهام", "rows": rows}])

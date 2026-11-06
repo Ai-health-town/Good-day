@@ -71,6 +71,9 @@ TOOL = {"type": "function", "function": {"name": "propose_workspace_changes",
                 "target_id": {"type": "string"}, "values": {"type": "object", "additionalProperties": False,
                     "properties": {"title": {"type": "string"}, "notes": {"type": "string"},
                         "assigneeId": {"type": "string"}, "dueDate": {"type": "string"},
+                        "dueTime": {"type": "string", "description": "HH:MM بتوقيت الرياض، أو نص فارغ لعدم تحديد ساعة."},
+                        "reminderEnabled": {"type": "boolean"},
+                        "reminderMinutes": {"type": "integer", "enum": [0, 5, 10, 15, 30, 60, 120, 1440]},
                         "status": {"type": "string", "enum": list(STATUSES)},
                         "priority": {"type": "string", "enum": list(PRIORITIES)},
                         "estimatedMinutes": {"type": "integer"}, "text": {"type": "string"},
@@ -130,7 +133,7 @@ def build_context(store, token, state, project_id, file_ids, question, include_w
                                  t.get("status") != "done"), reverse=True)
         for task in tasks[:50]:
             data["tasks"].append({k: (str(task.get(k, ""))[:2000] if k == "notes" else task.get(k, ""))
-                for k in ("id", "title", "assigneeId", "status", "priority", "dueDate", "notes", "version")})
+                for k in ("id", "title", "assigneeId", "status", "priority", "dueDate", "dueTime", "reminderEnabled", "reminderMinutes", "notes", "version")})
         data["members"] = [{"id": m["id"], "name": m["name"]} for m in state["members"][:200]]
         data["task_count_total"] = len(tasks)
         data["handover_shared"] = {k: str(state["handover"].get(k, ""))[:2500] for k in ("summary", "decisions", "next_step")}

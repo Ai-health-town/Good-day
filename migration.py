@@ -79,10 +79,10 @@ def build_merge(raw, state, project_id):
         file_map[source["id"]] = record["id"]
         hashes[fingerprint] = record["id"]
         summary["files_added"] += 1
-    known_tasks = {(label(t["title"]), t.get("dueDate", ""), t.get("projectId", "")) for t in state["tasks"]}
+    known_tasks = {(label(t["title"]), t.get("dueDate", ""), t.get("dueTime") or "", t.get("projectId", "")) for t in state["tasks"]}
     for source in incoming["tasks"]:
         target = project_map.get(source.get("projectId"), project_id)
-        signature = label(source["title"]), source.get("dueDate", ""), target
+        signature = label(source["title"]), source.get("dueDate", ""), source.get("dueTime") or "", target
         if signature in known_tasks:
             summary["tasks_skipped"] += 1
             continue

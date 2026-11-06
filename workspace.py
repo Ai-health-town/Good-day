@@ -18,6 +18,7 @@ import uuid
 from contextlib import contextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from task_schedule import ScheduleError, validate_schedule, is_overdue
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
                         Text, case, create_engine, delete, event, insert, select, update)
@@ -41,6 +42,13 @@ class Forbidden(WorkspaceError):
 
 class Conflict(WorkspaceError):
     pass
+
+
+def validate_task_schedule(task):
+    try:
+        validate_schedule(task)
+    except ScheduleError as exc:
+        raise WorkspaceError(str(exc)) from None
 
 
 def now_iso():
@@ -148,12 +156,7 @@ def prepare_import(raw):
                 for nested in ("subtasks", "comments"):
                     if not isinstance(record.get(nested, []), list) or any(not isinstance(r, dict) for r in record.get(nested, [])):
                         raise WorkspaceError("تفاصيل مهمة غير صالحة.")
-                due = record.get("dueDate")
-                if due:
-                    try:
-                        datetime.strptime(due, "%Y-%m-%d")
-                    except (TypeError, ValueError):
-                        raise WorkspaceError("يوجد تاريخ مهمة غير صالح.") from None
+                validate_task_schedule(record)
             if name in ("members", "projects", "stakeholders") and (not isinstance(record.get("name"), str) or not record["name"].strip()):
                 raise WorkspaceError("اسم غير صالح في " + name)
             if name == "messages" and not isinstance(record.get("text"), str):
@@ -437,6 +440,7 @@ class Store:
                     raise WorkspaceError("اكتب عنوان المهمة.")
                 if record.get("status") not in STATUSES or record.get("priority") not in PRIORITIES:
                     raise WorkspaceError("اختر حالة وأولوية صحيحتين.")
+                validate_task_schedule(record)
                 record.setdefault("createdBy", old.get("createdBy", actor["member_id"]) if old else actor["member_id"])
                 if record.get("status") == "done" and (not old or old.get("status") != "done"):
                     record["completedAt"] = now_iso()
@@ -547,7 +551,7 @@ class Store:
 
     def patch_tasks(self, token, patches):
         """Commit a table edit atomically; detect stale individual rows."""
-        allowed = {"title", "assigneeId", "status", "priority", "dueDate", "estimatedMinutes"}
+        allowed = {"title", "assigneeId", "status", "priority", "dueDate", "dueTime", "reminderEnabled", "reminderMinutes", "estimatedMinutes"}
         with self.transaction() as conn:
             actor = self._actor(conn, token)
             self.require(actor, "edit")
@@ -561,6 +565,7 @@ class Store:
                 if set(values) - allowed:
                     raise Forbidden("هذا الحقل لا يُعدّل من الجدول.")
                 changed = task | values
+                validate_task_schedule(changed)
                 if not isinstance(changed.get("title"), str) or not changed["title"].strip():
                     raise WorkspaceError("عنوان المهمة مطلوب.")
                 if changed.get("status") not in STATUSES or changed.get("priority") not in PRIORITIES:
@@ -813,8 +818,8 @@ class Store:
 def morning_brief(state):
     today = today_iso()
     pending = [t for t in state["tasks"] if t.get("status") != "done"]
-    overdue = [t for t in pending if t.get("dueDate") and t["dueDate"] < today]
+    overdue = [t for t in pending if is_overdue(t)]
     due = [t for t in pending if t.get("dueDate") == today]
     waiting = [t for t in pending if t.get("status") == "waiting_stakeholder"]
-    focus = sorted(pending, key=lambda t: (0 if t.get("dueDate") and t["dueDate"] <= today else 1, list(PRIORITIES).index(t.get("priority", "medium")), t.get("dueDate") or "9999"))[:3]
+    focus = sorted(pending, key=lambda t: (0 if t.get("dueDate") and t["dueDate"] <= today else 1, list(PRIORITIES).index(t.get("priority", "medium")), t.get("dueDate") or "9999", t.get("dueTime") or "23:59"))[:3]
     return {"pending": pending, "overdue": overdue, "today": due, "waiting": waiting, "focus": focus}

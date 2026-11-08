@@ -18,7 +18,7 @@ from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSE
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
 from migration import build_merge
 from components import (flash, perform, lookup, record_picker, enum_picker, end_session,
-                        end_day, account_settings, edit_task, edit_directory, edit_file,
+                        end_day, account_settings, edit_task, task_delete_control, edit_directory, edit_file,
                         chat_page, members_page, activity_page, directory_page)
 from theme import inject, safe, welcome, panel, empty
 from task_schedule import REMINDER_OPTIONS, due_label, is_overdue
@@ -196,11 +196,12 @@ def overview(store, token, state, actor):
             empty("كل شيء جاهز لبداية جديدة", "أضف أول مهمة، أو ادمج ملف العمل السابق من بداية اليوم.")
         for task in brief["focus"]:
             with st.container(border=True):
-                info, action = st.columns([5, 1])
+                info, action = st.columns([4.5, 1.5])
                 info.markdown("**" + safe(task["title"]) + "**")
                 info.caption(f"{lookup(state['members'], task.get('assigneeId'))} · {due_label(task)} · {PRIORITIES[task.get('priority', 'medium')]}")
-                if action.button("فتح", key="focus_" + task["id"], width="stretch"):
+                if action.button("تعديل المهمة" if store.can_edit(actor) else "عرض المهمة", key="focus_" + task["id"], icon=":material/edit:", width="stretch"):
                     edit_task(store, token, state, actor, task)
+                task_delete_control(store, token, actor, task, key="focus_" + task["id"], slot=action)
         panel("حركة المشاريع", "الإنجاز مقابل المطلوب")
         for project in state["projects"]:
             tasks = [t for t in state["tasks"] if t.get("projectId") == project["id"]]
@@ -224,6 +225,10 @@ def overview(store, token, state, actor):
 
 
 def tasks_page(store, token, state, actor):
+    if st.session_state.pop("refresh_task_table", False):
+        for key in list(st.session_state):
+            if key.startswith(("table_baseline_", "grid_")):
+                st.session_state.pop(key, None)
     title, create, export = st.columns([4, 1, 1.2])
     title.subheader("من التخطيط إلى الإنجاز")
     if create.button("＋ مهمة", type="primary", disabled=not store.can_edit(actor), width="stretch"):
@@ -283,12 +288,13 @@ def tasks_page(store, token, state, actor):
                         st.markdown("**" + safe(task["title"]) + "**")
                         st.caption(lookup(state["members"], task.get("assigneeId")))
                         st.caption(due_label(task) + " · " + PRIORITIES[task.get("priority", "medium")])
-                        if st.button("التفاصيل", key="board_" + task["id"], width="stretch"):
+                        if st.button("تعديل المهمة" if store.can_edit(actor) else "عرض المهمة", key="board_" + task["id"], icon=":material/edit:", width="stretch"):
                             edit_task(store, token, state, actor, task)
+                        task_delete_control(store, token, actor, task, key="board_" + task["id"])
                         next_status = {"todo": "in_progress", "in_progress": "done", "waiting_stakeholder": "in_progress", "done": "todo"}[status]
                         action = {"todo": "بدء العمل", "in_progress": "إنجاز ✓", "waiting_stakeholder": "استئناف العمل", "done": "إعادة فتح"}[status]
                         if st.button(action, key="stage_" + task["id"], disabled=not store.can_edit(actor), width="stretch"):
-                            perform(lambda t=task, s=next_status: store.patch_tasks(token, [{"id": t["id"], "version": t.get("version", 1), "changes": {"status": s}}]))
+                            perform(lambda t=task, s=next_status: store.patch_tasks(token, [{"id": t["id"], "version": t.get("version", 1), "changes": {"status": s}}]), refresh_tasks=True)
         return
     view_key = hashlib.sha256(json.dumps([sorted(t["id"] for t in rows), query, owner, mode]).encode()).hexdigest()[:14]
     baseline_key = "table_baseline_" + view_key
@@ -297,6 +303,19 @@ def tasks_page(store, token, state, actor):
         for key in previous[:-5]: del st.session_state[key]
         st.session_state[baseline_key] = copy.deepcopy(rows)
     baseline = st.session_state[baseline_key]
+    chooser, edit, remove, refresh = st.columns([3.8, 1.3, 1.3, 1.3], vertical_alignment="bottom")
+    task_by_id = {task["id"]: task for task in rows}
+    task_ids = list(task_by_id)
+    if st.session_state.get("task_action_choice") not in task_ids:
+        st.session_state.pop("task_action_choice", None)
+    selected_id = chooser.selectbox("اختر مهمة لتعديلها أو حذفها", task_ids,
+                                   format_func=lambda ident: task_by_id[ident]["title"], key="task_action_choice")
+    chosen = task_by_id[selected_id]
+    if edit.button("تعديل المهمة" if store.can_edit(actor) else "عرض المهمة", icon=":material/edit:", width="stretch", key="edit_selected_task"):
+        edit_task(store, token, state, actor, chosen)
+    task_delete_control(store, token, actor, chosen, key="table", slot=remove)
+    if refresh.button("تحديث الجدول", width="stretch"):
+        st.session_state.pop(baseline_key, None); st.rerun()
     owners = {"": "غير معين"}
     for member in state["members"]:
         duplicate = sum(m["name"] == member["name"] for m in state["members"]) > 1
@@ -345,12 +364,6 @@ def tasks_page(store, token, state, actor):
                 del st.session_state[baseline_key]; flash("حُفظت تعديلات الجدول")
         else:
             st.info("لا توجد تغييرات جديدة.")
-    chosen = st.selectbox("اختر مهمة لعرض تفاصيلها أو تعديلها", rows, format_func=lambda t: t["title"])
-    a, b = st.columns([2, 1])
-    if a.button("فتح التفاصيل والتعديل", width="stretch"):
-        edit_task(store, token, state, actor, chosen)
-    if b.button("تحديث الجدول", width="stretch"):
-        st.session_state.pop(baseline_key, None); st.rerun()
 
 
 def files_page(store, token, state, actor):

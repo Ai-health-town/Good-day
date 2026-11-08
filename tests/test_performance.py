@@ -1,10 +1,16 @@
 import time
+import copy
+import io
+from pathlib import Path
 
 import pytest
 from sqlalchemy import event, update
+from sqlalchemy.engine import Engine
+from streamlit.testing.v1 import AppTest
 
-from workspace import Forbidden, Store, sessions, users
+from workspace import Forbidden, Store, WorkspaceError, sessions, users
 from tests.test_workspace import workspace, task
+from tests.test_ui import element, healthy
 
 
 def capture_queries(store):
@@ -129,3 +135,121 @@ def test_shared_payload_cache_does_not_share_or_cache_account_permissions(worksp
     _, same_revision, changed_actor = store.context(reader)
     assert same_revision == revision
     assert changed_actor["role"] == "member"
+
+
+def test_successful_save_reuses_its_committed_snapshot_without_downloading_it_again(workspace):
+    store, token = workspace
+    original = task("committed")
+    store.put(token, "tasks", original)
+    original["title"] = "تعديل غير محفوظ"
+    queries = capture_queries(store)
+    state, revision, _ = store.context(token)
+    assert state["tasks"][0]["title"] == "متابعة العمل"
+    assert len(queries) == 1
+    with store.engine.connect() as conn:
+        row = conn.exec_driver_sql(*queries[0]).mappings().one()
+    assert row["workspace_payload"] is None
+    assert row["workspace_revision"] == revision
+
+
+def test_rolled_back_snapshot_is_never_published_or_reused_by_the_next_transaction(workspace):
+    store, token = workspace
+    before, revision = store.read(token)
+    with pytest.raises(RuntimeError):
+        with store.transaction() as conn:
+            changed = copy.deepcopy(before)
+            changed["tasks"].append(task("rolled_back"))
+            store._save(conn, changed, revision)
+            raise RuntimeError("test rollback")
+    with store.transaction() as conn:
+        store._actor(conn, token)
+    assert store.read(token) == (before, revision)
+
+
+def test_original_cache_is_bounded_and_does_not_bypass_live_access(workspace):
+    from filetools import parse_upload
+    from tests.test_neon_ai import attach_storage
+    store, owner = workspace
+    client = attach_storage(store)
+    store.add_files(owner, [parse_upload(f"file{i}.txt", f"original{i}".encode(), "p_general") for i in range(5)])
+    records = store.read(owner)[0]["files"]
+    for record in records:
+        assert store.file_bytes(owner, record["id"]).startswith(b"original")
+    assert len(client.gets) == 5
+    assert store.file_bytes(owner, records[-1]["id"]) == b"original4"
+    assert len(client.gets) == 5
+    assert store.file_bytes(owner, records[0]["id"]) == b"original0"
+    assert len(client.gets) == 6  # Four-entry RAM cache evicts the oldest original.
+    foreign = records[0]["object"] | {"bucket": "another-private"}
+    with pytest.raises(WorkspaceError): store.storage.download(foreign)
+    assert len(client.gets) == 6
+    store.remove(owner, "files", records[0]["id"], records[0]["version"])
+    with pytest.raises(WorkspaceError, match="غير موجود"): store.file_bytes(owner, records[0]["id"])
+    store.logout(owner)
+    with pytest.raises(Forbidden): store.file_bytes(owner, records[-1]["id"])
+    assert len(client.gets) == 6
+
+
+def test_deferred_download_checks_the_session_before_generating_any_bytes(workspace):
+    from components import download_data
+    from filetools import docx_bytes
+    from docx import Document
+    store, token = workspace
+    calls = []
+    def build():
+        calls.append(True)
+        return docx_bytes("تقرير", "النص المحرر")
+    deferred = download_data(store, token, build)
+    assert calls == []
+    assert any(p.text == "النص المحرر" for p in Document(io.BytesIO(deferred())).paragraphs)
+    assert len(calls) == 1
+    store.logout(token)
+    with pytest.raises(Forbidden): deferred()
+    assert len(calls) == 1
+
+
+def platform(store, token, monkeypatch, page):
+    monkeypatch.setenv("DATABASE_URL", str(store.engine.url))
+    monkeypatch.setenv("GDAY_LOCAL_MODE", "true")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+    app.session_state["token"] = token
+    app.session_state["navigation"] = page
+    app.run()
+    healthy(app)
+    return app
+
+
+@pytest.mark.parametrize("page", ["المهام", "التقارير"])
+def test_page_render_does_not_generate_downloads_until_the_user_requests_them(workspace, monkeypatch, page):
+    import filetools
+    store, token = workspace
+    store.put(token, "tasks", task("export"))
+    def fail(*args, **kwargs):
+        raise AssertionError("Download generation should not block page rendering")
+    monkeypatch.setattr(filetools, "tasks_excel", fail)
+    monkeypatch.setattr(filetools, "docx_bytes", fail)
+    app = platform(store, token, monkeypatch, page)
+    assert len(app.get("download_button")) >= (2 if page == "التقارير" else 1)
+
+
+@pytest.mark.parametrize("page,button", [("نظرة اليوم", "تحديث"), ("المهام", "تحديث الجدول"), ("الدردشات", None)])
+def test_refresh_and_initial_chat_use_a_single_live_workspace_query(workspace, monkeypatch, page, button):
+    store, token = workspace
+    store.put(token, "tasks", task("fresh"))
+    app = platform(store, token, monkeypatch, page)
+    other = Store(str(store.engine.url))
+    current = other.read(token)[0]["tasks"][0]
+    other.put(token, "tasks", current | {"title": "آخر تعديل من زميل"}, current["version"])
+    queries = []
+    def capture(conn, cursor, statement, parameters, context, many):
+        if statement.lstrip().upper().startswith("SELECT") and "gday_" in statement:
+            queries.append(statement)
+    event.listen(Engine, "before_cursor_execute", capture)
+    try:
+        element(app.button, button).click().run() if button else app.run()
+    finally:
+        event.remove(Engine, "before_cursor_execute", capture)
+    healthy(app)
+    assert len(queries) == 1
+    if page == "المهام":
+        assert app.dataframe[0].value.iloc[0]["المهمة"] == "آخر تعديل من زميل"

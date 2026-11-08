@@ -36,6 +36,14 @@ def lookup(records, ident, default="غير معين"):
     return next((x.get("name", x.get("title", default)) for x in records if x["id"] == ident), default)
 
 
+def download_data(store, token, build):
+    """Generate only on download, after checking that the session is still live."""
+    def prepare():
+        store.actor(token)
+        return build()
+    return prepare
+
+
 def record_picker(label, records, value="", empty=True, key=None):
     options = ([""] if empty else []) + [x["id"] for x in records]
     if not options:
@@ -110,7 +118,7 @@ def end_session(store, token, all_sessions=False):
 @st.dialog("حفظ اليوم", width="large")
 def end_day(store, token, state, actor):
     st.write("كل تعديل تحفظه محفوظ مباشرة في المنصة. نسخة اليوم تجمع المهام والملفات والمحادثات وتسليم اليوم في ملف واحد.")
-    st.download_button("تنزيل نسخة اليوم كاملة — JSON", store.backup_bytes(state), file_name=f"Gday_{today_iso()}.json", mime="application/json", type="primary", width="stretch")
+    st.download_button("تنزيل نسخة اليوم كاملة — JSON", download_data(store, token, lambda: store.backup_bytes(state)), file_name=f"Gday_{today_iso()}.json", mime="application/json", type="primary", width="stretch", on_click="ignore")
     st.caption("النسخة لا تحتوي كلمات المرور أو جلسات الدخول. تُستعاد من زر بداية اليوم.")
     if any(f.get("object") for f in state["files"]):
         backup_revision = store.read(token)[1]
@@ -122,7 +130,7 @@ def end_day(store, token, state, actor):
                 st.error(str(exc))
         portable = st.session_state.get("portable_backup")
         if portable and portable[0] == backup_revision:
-            st.download_button("تنزيل النسخة المستقلة بالأصول", portable[1], f"Gday_portable_{today_iso()}.json", "application/json")
+            st.download_button("تنزيل النسخة المستقلة بالأصول", portable[1], f"Gday_portable_{today_iso()}.json", "application/json", on_click="ignore")
     if actor["role"] in ("admin", "manager"):
         if st.button("حفظ نقطة رجوع داخل المنصة", width="stretch"):
             perform(lambda: store.save_snapshot(token, "نهاية يوم " + today_iso()), "حُفظت نسخة اليوم داخل المنصة")
@@ -130,7 +138,7 @@ def end_day(store, token, state, actor):
         if saved:
             st.markdown("**آخر نقاط الرجوع**")
             selected = st.selectbox("اختيار نسخة محفوظة", saved, format_func=lambda v: f"{v['at'][:16]} · {v['label']}")
-            st.download_button("تنزيل نقطة الرجوع المختارة", store.snapshot_bytes(token, selected["id"]), f"Gday_restore_{selected['at'][:10]}.json", "application/json")
+            st.download_button("تنزيل نقطة الرجوع المختارة", lambda: store.snapshot_bytes(token, selected["id"]), f"Gday_restore_{selected['at'][:10]}.json", "application/json", on_click="ignore")
             st.caption("تُحفظ آخر 14 نقطة رجوع. لاستعادة واحدة، نزّلها وارفعها في بداية اليوم.")
 
 
@@ -342,7 +350,7 @@ def edit_file(store, token, state, actor, original):
         except WorkspaceError as exc:
             st.warning(str(exc))
         else:
-            st.download_button("تنزيل الملف الأصلي", original_bytes, file_name=Path(record.get("originalName", record["title"])).name, width="stretch")
+            st.download_button("تنزيل الملف الأصلي", original_bytes, file_name=Path(record.get("originalName", record["title"])).name, width="stretch", on_click="ignore")
     if record.get("legacy") and not (record.get("blob") or record.get("object")):
         st.info("هذا المحتوى من النسخة السابقة. النسخة السابقة حفظت نصوصًا وجداول فقط؛ يتوفر هنا المحتوى المحفوظ فيها.")
     modes = (["معاينة الأصل"] if original_bytes else []) + ["نسخة العمل","التعليقات"]
@@ -402,7 +410,7 @@ def file_working_copy(store,token,state,actor,original,record,editable,original_
         text = st.text_area("محتوى المستند" if record.get("type") != "pdf" else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
         record["text"] = text
         record.pop("content", None)
-        st.download_button("تنزيل المحتوى — Word", docx_bytes(Path(title).stem, text), Path(title).stem + "_edited.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        st.download_button("تنزيل المحتوى — Word", download_data(store, token, lambda: docx_bytes(Path(title).stem, text)), Path(title).stem + "_edited.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")
     if st.button("حفظ تعديلات الملف", type="primary", disabled=not editable, width="stretch"):
         if not title.strip():
             st.error("اسم الملف مطلوب.")
@@ -438,9 +446,9 @@ def clear_chat_dialog(store, token, state, revision):
 
 
 @st.fragment(run_every="20s")
-def chat_page(store, token, project_id=""):
+def chat_page(store, token, project_id="", initial_context=None):
     try:
-        state, revision, actor = store.context(token)
+        state, revision, actor = initial_context.pop() if initial_context else store.context(token)
     except Forbidden:
         st.rerun()
     a, b = st.columns([5, 1.4])

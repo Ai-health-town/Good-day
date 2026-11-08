@@ -17,7 +17,7 @@ import streamlit as st
 from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSES, PRIORITIES, now_iso, today_iso, morning_brief, uid
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
 from migration import build_merge
-from components import (flash, perform, lookup, record_picker, enum_picker, end_session,
+from components import (flash, perform, lookup, record_picker, enum_picker, end_session, download_data,
                         end_day, account_settings, edit_task, task_time_input, task_delete_control, edit_directory, edit_file,
                         chat_page, members_page, activity_page, directory_page)
 from theme import inject, safe, welcome, panel, empty
@@ -53,6 +53,11 @@ def open_store(url, store_generation):
 def jump(page):
     st.session_state["navigate_to"] = page
     st.rerun()
+
+
+def refresh_task_table(baseline_key, grid_key):
+    st.session_state.pop(baseline_key, None)
+    st.session_state.pop(grid_key, None)
 
 
 def login_page(store):
@@ -233,7 +238,7 @@ def tasks_page(store, token, state, actor):
     title.subheader("من التخطيط إلى الإنجاز")
     if create.button("＋ مهمة", type="primary", disabled=not store.can_edit(actor), width="stretch"):
         edit_task(store, token, state, actor)
-    export.download_button("تصدير Excel", tasks_excel(state), f"Gday_tasks_{today_iso()}.xlsx", width="stretch")
+    export.download_button("تصدير Excel", download_data(store, token, lambda: tasks_excel(state)), f"Gday_tasks_{today_iso()}.xlsx", width="stretch", on_click="ignore")
     metrics(state)
     st.write("")
     with st.form("quick_task", clear_on_submit=True):
@@ -315,8 +320,7 @@ def tasks_page(store, token, state, actor):
     if edit.button("تعديل المهمة" if store.can_edit(actor) else "عرض المهمة", icon=":material/edit:", width="stretch", key="edit_selected_task"):
         edit_task(store, token, state, actor, chosen)
     task_delete_control(store, token, actor, chosen, key="table", slot=remove)
-    if refresh.button("تحديث الجدول", width="stretch"):
-        st.session_state.pop(baseline_key, None); st.rerun()
+    refresh.button("تحديث الجدول", width="stretch", on_click=refresh_task_table, args=(baseline_key, "grid_" + view_key))
     owners = {"": "غير معين"}
     for member in state["members"]:
         duplicate = sum(m["name"] == member["name"] for m in state["members"]) > 1
@@ -441,9 +445,10 @@ def reports_page(store, token, state, actor):
     a, b = st.columns([1.4, 1], gap="large")
     with a:
         panel("الملخص التنفيذي", "بدون أسماء أفراد")
-        text = st.text_area("معاينة التقرير وتحريره", executive_text(state), height=380, key="report_" + hashlib.sha256(executive_text(state).encode()).hexdigest()[:12])
-        st.download_button("تنزيل التقرير — Word", docx_bytes("تقرير حالة العمل", text), f"Gday_executive_{today_iso()}.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary")
-        st.download_button("تنزيل تفاصيل المهام — Excel", tasks_excel(state), f"Gday_tasks_{today_iso()}.xlsx")
+        initial_text = executive_text(state)
+        text = st.text_area("معاينة التقرير وتحريره", initial_text, height=380, key="report_" + hashlib.sha256(initial_text.encode()).hexdigest()[:12])
+        st.download_button("تنزيل التقرير — Word", download_data(store, token, lambda: docx_bytes("تقرير حالة العمل", text)), f"Gday_executive_{today_iso()}.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", type="primary", on_click="ignore")
+        st.download_button("تنزيل تفاصيل المهام — Excel", download_data(store, token, lambda: tasks_excel(state)), f"Gday_tasks_{today_iso()}.xlsx", on_click="ignore")
     with b:
         panel("توزيع العمل المفتوح", "بالساعات المقدرة")
         workload = {}
@@ -550,7 +555,7 @@ def main():
         st.markdown(f'<div class="side-person"><div class="avatar">{safe(actor["name"][:1])}</div><div><strong>{safe(actor["name"])}</strong><br><small>{safe(ROLES[actor["role"]])}</small></div></div>', unsafe_allow_html=True)
         st.caption("● الحفظ متصل" if store.remote else "● تجربة محلية")
         a, b = st.columns(2)
-        if a.button("تحديث", width="stretch"): st.rerun()
+        a.button("تحديث", width="stretch")
         if b.button("حسابي", width="stretch"): account_settings(store, token)
         if st.button("تسجيل الخروج", width="stretch"): end_session(store, token)
     state = copy.copy(full_state)
@@ -577,7 +582,7 @@ def main():
     elif page == "المشاريع": directory_page(store, token, state, actor, "projects")
     elif page == "الجهات": directory_page(store, token, state, actor, "stakeholders")
     elif page == "الملفات": files_page(store, token, state, actor)
-    elif page == "الدردشات": chat_page(store, token, project_id)
+    elif page == "الدردشات": chat_page(store, token, project_id, [(full_state, revision, actor)])
     elif page == "مركز المساعد": agent_page(store, token, state, actor)
     elif page == "التقارير": reports_page(store, token, state, actor)
     elif page == "الأعضاء": members_page(store, token, full_state, actor)

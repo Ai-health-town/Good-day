@@ -5,6 +5,7 @@ import base64
 import copy
 import hashlib
 import re
+from functools import lru_cache
 from urllib.parse import urlsplit
 
 from workspace import WorkspaceError
@@ -54,6 +55,9 @@ class NeonStorage:
                 config=Config(signature_version="s3v4", s3={"addressing_style": "path"},
                     retries={"total_max_attempts": 1}, connect_timeout=10, read_timeout=30))
         self.client = client
+        # Content-addressed, verified originals are immutable. Four files cap
+        # this private in-memory cache at 32 MiB; Store still checks each read.
+        self._download_cached = lru_cache(maxsize=4)(self._download)
 
     def check(self):
         try:
@@ -87,8 +91,11 @@ class NeonStorage:
         validate_object(ref)
         if ref["endpoint"] != self.endpoint or ref["bucket"] != self.bucket:
             raise WorkspaceError("هذا الأصل مرتبط بمخزن مختلف. أعد إعداد مخزنه الأصلي أو استورد نسخة تشمل الأصول.")
+        return self._download_cached(ref["sha256"], ref["size"])
+
+    def _download(self, digest, size):
         try:
-            response = self.client.get_object(Bucket=self.bucket, Key=ref["key"])
+            response = self.client.get_object(Bucket=self.bucket, Key="gday/v1/" + digest)
             stream = response["Body"]
             try:
                 raw = stream.read(MAX_FILE + 1)
@@ -96,7 +103,7 @@ class NeonStorage:
                 stream.close()
         except Exception:
             raise WorkspaceError("تعذر تنزيل الملف من Neon. تحقق من الاتصال وبقاء الأصل في المخزن.") from None
-        if len(raw) != ref["size"] or hashlib.sha256(raw).hexdigest() != ref["sha256"]:
+        if len(raw) != size or hashlib.sha256(raw).hexdigest() != digest:
             raise WorkspaceError("فشل التحقق من سلامة الملف الأصلي.")
         return raw
 

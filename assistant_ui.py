@@ -12,7 +12,7 @@ from sqlalchemy import select
 from ai_service import AIConfig, NeonAI
 from ai_store import threads
 from assistant_desk import ACTIVE, AssistantDesk, DeskWorker
-from components import edit_file, edit_task, lookup
+from components import download_data, edit_file, edit_task, lookup
 from filetools import docx_bytes
 from workspace import WorkspaceError, uid, ZONE
 
@@ -45,9 +45,9 @@ def _render_request(desk, worker, store, token, job):
         count = job["meta"].get("executed", 0)
         if count: st.success(f"حُفظت {count} تغييرات في المشروع بواسطة gday.assistant.")
         a, b = st.columns(2)
-        a.download_button("تنزيل الرد — Word", docx_bytes("نتيجة طلب المساعد", job["answer"]),
+        a.download_button("تنزيل الرد — Word", download_data(store, token, lambda: docx_bytes("نتيجة طلب المساعد", job["answer"])),
             file_name="Gday_Assistant_Result.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            key="desk_download_" + ident, width="stretch")
+            key="desk_download_" + ident, width="stretch", on_click="ignore")
         if b.button("فتح مهمة الطلب", key="desk_task_" + ident, width="stretch"):
             state, _, actor = store.context(token)
             task = next((t for t in state["tasks"] if t["id"] == details["task_id"]), None)

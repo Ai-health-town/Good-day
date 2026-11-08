@@ -264,6 +264,7 @@ class Store:
     @contextmanager
     def transaction(self):
         with self.engine.connect() as conn:
+            conn.info.pop("gday_pending_snapshot", None)
             if not self.remote:
                 conn.exec_driver_sql("BEGIN IMMEDIATE")
             else:
@@ -272,7 +273,14 @@ class Store:
             try:
                 yield conn
                 conn.commit()
+                snapshot = conn.info.pop("gday_pending_snapshot", None)
+                if snapshot is not None:
+                    state, revision = snapshot
+                    with self._cache_lock:
+                        if self._cached_revision is None or revision >= self._cached_revision:
+                            self._cached_state, self._cached_revision = state, revision
             except Exception:
+                conn.info.pop("gday_pending_snapshot", None)
                 conn.rollback()
                 raise
 
@@ -287,6 +295,9 @@ class Store:
         changed = conn.execute(update(workspaces).where(workspaces.c.id == "main", workspaces.c.revision == revision).values(payload=encoded, revision=revision + 1))
         if changed.rowcount != 1:
             raise Conflict("تغيرت البيانات أثناء الحفظ؛ حدّث الصفحة ثم أعد المحاولة.")
+        # Publish only after COMMIT. The next authenticated read can reuse
+        # these exact bytes' state instead of downloading the workspace again.
+        conn.info["gday_pending_snapshot"] = (copy.deepcopy(state), revision + 1)
         with self._cache_lock:
             self._cached_revision = None
             self._cached_state = None

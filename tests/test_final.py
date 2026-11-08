@@ -104,6 +104,7 @@ def test_table_batch_is_atomic_and_completion_time_is_real(workspace):
 def test_payload_cache_checks_revision_and_auth_on_every_read(workspace):
     from unittest.mock import patch
     store, owner = workspace
+    store = Store(str(store.engine.url))  # Exercise a genuinely cold worker.
     with patch("workspace.json.loads", wraps=json.loads) as decode:
         state, _, _ = store.context(owner)
         store.context(owner)

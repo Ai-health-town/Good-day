@@ -515,7 +515,14 @@ def main():
         if not username or not password or password.startswith(("REPLACE", "CHANGE", "your_")):
             st.info("أضف بيانات المدير الأول في Secrets. كلمة المرور 12 حرفًا على الأقل."); return
         store.bootstrap(username, password, str(setting("GDAY_ADMIN_NAME", "مدير المنصة")))
-    cookies = stx.CookieManager(key="gday_cookies")
+    token = st.session_state.get("token")
+    if not token and not st.session_state.get("block_cookie"):
+        token = st.context.cookies.get(COOKIE)
+    # Existing authenticated sessions do not need another component/browser
+    # round trip on every filter, navigation or refresh.
+    cookies = None
+    if st.session_state.get("delete_cookie") or st.session_state.get("set_cookie") or (not token and not st.session_state.get("block_cookie")):
+        cookies = stx.CookieManager(key="gday_cookies")
     if st.session_state.pop("delete_cookie", False):
         try:
             cookies.delete(COOKIE, key="remove_gday_cookie")
@@ -526,9 +533,8 @@ def main():
     pending = st.session_state.pop("set_cookie", None)
     if pending:
         cookies.set(COOKIE, pending, key="remember_gday_cookie", expires_at=datetime.now(timezone.utc) + timedelta(days=REMEMBER_DAYS), secure=(st.context.url or "").startswith("https:"), same_site="strict", path="/")
-    token = st.session_state.get("token")
-    if not token and not st.session_state.get("block_cookie"):
-        token = st.context.cookies.get(COOKIE) or cookies.get(COOKIE)
+    if not token and not st.session_state.get("block_cookie") and cookies is not None:
+        token = cookies.get(COOKIE)
     try:
         full_state, revision, actor = store.context(token)
     except Forbidden:

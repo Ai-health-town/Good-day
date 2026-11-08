@@ -387,14 +387,12 @@ def file_working_copy(store,token,state,actor,original,record,editable,original_
         if original_excel:
             from sheet_preview import edited_excel
             st.caption("الصف الأول جزء من البيانات. يمكنك كتابة صيغ Excel مثل =SUM(B2:B8). التصدير يطبّق تغييرات الخلايا مع إبقاء التنسيق والصيغ والأوراق الأخرى؛ الأصل يبقى محفوظًا.")
-            try:
-                exported = edited_excel(original_bytes,sheets)
-                st.download_button("تنزيل نسخة التعديلات — Excel",exported,Path(title).stem + "_edited.xlsx","application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            except WorkspaceError as exc:
-                st.warning(str(exc))
+            st.download_button("تنزيل نسخة التعديلات — Excel", download_data(store, token, lambda: edited_excel(original_bytes, sheets)),
+                               Path(title).stem + "_edited.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
         else:
             st.caption("نسخة عمل بالقيم النصية. الأصل يحتفظ بتنسيقه وصيغه، وتُعرض نتائجه في معاينة الأصل.")
-            st.download_button("تنزيل الجدول المحرر — Excel", sheet_bytes(sheets), Path(title).stem + "_edited.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("تنزيل الجدول المحرر — Excel", download_data(store, token, lambda: sheet_bytes(sheets)),
+                               Path(title).stem + "_edited.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", on_click="ignore")
         if editable and not original_excel:
             new_column = st.text_input("عمود جديد — اختياري", key="new_column_" + record["id"])
             if st.button("إضافة العمود", disabled=not new_column.strip()):

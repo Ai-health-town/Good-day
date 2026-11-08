@@ -10,6 +10,7 @@ from streamlit.testing.v1 import AppTest
 
 from workspace import Forbidden, Store, WorkspaceError, sessions, users
 from tests.test_workspace import workspace, task
+from tests.test_file_preview import workbook_bytes
 from tests.test_ui import element, healthy
 
 
@@ -302,3 +303,75 @@ def test_postgres_driver_skips_only_autocommit_rollbacks():
     connection.autocommit = False
     dialect.do_rollback(connection)
     connection.rollback.assert_called_once()
+
+
+def test_authenticated_navigation_does_not_wait_for_the_cookie_component(workspace, monkeypatch):
+    import extra_streamlit_components as stx
+    store, token = workspace
+    def fail(*args, **kwargs):
+        raise AssertionError("An authenticated session does not need a cookie component")
+    monkeypatch.setattr(stx, "CookieManager", fail)
+    app = platform(store, token, monkeypatch, "نظرة اليوم")
+    app.radio(key="navigation").set_value("الجهات").run()
+    healthy(app)
+    element(app.button, "تحديث").click().run()
+    healthy(app)
+
+
+@pytest.mark.parametrize("original_excel", [False, True])
+def test_spreadsheet_working_copy_generates_an_authenticated_export_only_on_download(
+    workspace, workbook_bytes, monkeypatch, original_excel
+):
+    import components
+    import sheet_preview
+    import streamlit as st
+    from filetools import parse_upload
+    from openpyxl import load_workbook
+    store, token = workspace
+    record = parse_upload("تقرير.xlsx", workbook_bytes, "p_general") if original_excel else {
+        "id": "plain-sheet", "title": "جدول", "type": "sheet", "projectId": "p_general",
+        "sheets": [{"name": "البيانات", "rows": [["العدد"], ["0"]]}],
+    }
+    store.put(token, "files", record)
+    monkeypatch.setenv("DATABASE_URL", str(store.engine.url))
+    captured, built = {}, []
+    download = st.download_button
+    build = sheet_preview.edited_excel if original_excel else components.sheet_bytes
+    def track_build(*args, **kwargs):
+        built.append(True)
+        return build(*args, **kwargs)
+    monkeypatch.setattr(sheet_preview if original_excel else components, "edited_excel" if original_excel else "sheet_bytes", track_build)
+    def capture(label, data, *args, **kwargs):
+        captured[label] = data
+        return download(label, data, *args, **kwargs)
+    monkeypatch.setattr(st, "download_button", capture)
+    app = AppTest.from_string('''
+import copy, os
+import streamlit as st
+from workspace import Store
+from components import file_working_copy
+store = Store(os.environ['DATABASE_URL'])
+token = st.session_state['test_token']
+state, _, actor = store.context(token)
+record = state['files'][0]
+raw = store.file_bytes(token, record['id']) if record.get('blob') else None
+file_working_copy(store, token, state, actor, record, copy.deepcopy(record), True, raw)
+''', default_timeout=20)
+    app.session_state["test_token"] = token
+    app.run()
+    healthy(app)
+    label = "تنزيل نسخة التعديلات — Excel" if original_excel else "تنزيل الجدول المحرر — Excel"
+    prepare = captured[label]
+    assert callable(prepare) and not built
+    book = load_workbook(io.BytesIO(prepare()))
+    if original_excel:
+        assert book["التوثيق"]["D4"].value == "=C4/B4"
+        assert book["التوثيق"]["A1"].fill.fgColor.rgb.endswith("173D51")
+    else:
+        assert book.active["A2"].value == "0"
+    book.close()
+    assert len(built) == 1
+    store.logout(token)
+    with pytest.raises(Forbidden):
+        prepare()
+    assert len(built) == 1

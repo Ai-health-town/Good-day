@@ -21,8 +21,8 @@ from zoneinfo import ZoneInfo
 from task_schedule import ScheduleError, validate_schedule, is_overdue
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
-                        Text, case, create_engine, delete, event, insert, select, update)
-from sqlalchemy.exc import IntegrityError
+                        Text, bindparam, case, create_engine, delete, event, insert, select, update)
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 ZONE = ZoneInfo("Asia/Riyadh")
 STATUSES = {"todo": "جديدة", "in_progress": "قيد العمل", "waiting_stakeholder": "بانتظار رد", "done": "مكتملة"}
@@ -249,6 +249,14 @@ class Store:
             raise WorkspaceError("استخدم PostgreSQL للسحابة أو SQLite للتشغيل المحلي.")
         self.engine = create_engine(database_url, pool_pre_ping=True, hide_parameters=True, skip_autocommit_rollback=self.remote,
                                     connect_args={"timeout": 30, "check_same_thread": False} if not self.remote else {"connect_timeout": 10, "prepare_threshold": None})
+        # A separate, bounded pool makes single SELECTs one network round trip.
+        # Writes retain their pre-ping and transactional pool unchanged.
+        self._read_engine = create_engine(
+            database_url, isolation_level="AUTOCOMMIT", pool_pre_ping=False,
+            skip_autocommit_rollback=True, hide_parameters=True,
+            pool_size=2, max_overflow=2, pool_use_lifo=True,
+            connect_args={"connect_timeout": 10, "prepare_threshold": None},
+        ) if self.remote else self.engine
         if not self.remote:
             @event.listens_for(self.engine, "connect")
             def sqlite_options(conn, _):
@@ -289,11 +297,24 @@ class Store:
     def _read_connection(self):
         # Single-statement reads still authenticate against the live database.
         # PostgreSQL need not exchange BEGIN/ROLLBACK around each page read.
-        # Returning the connection restores its default transactional settings.
-        with self.engine.connect() as conn:
-            if self.remote:
+        # The dedicated remote pool is already in native autocommit mode.
+        with self._read_engine.connect() as conn:
+            if self.remote and self._read_engine is self.engine:
                 conn = conn.execution_options(isolation_level="AUTOCOMMIT")
             yield conn
+
+    def _read_one(self, statement):
+        if not statement.is_select:
+            raise ValueError("Only SELECT statements may use the read retry path.")
+        for attempt in range(2):
+            try:
+                with self._read_connection() as conn:
+                    return conn.execute(statement).mappings().first()
+            except DBAPIError as exc:
+                # SQLAlchemy invalidates disconnected pooled connections. Only
+                # retry a single side-effect-free read, never a write/transaction.
+                if not self.remote or not exc.connection_invalidated or attempt:
+                    raise
 
     def _state(self, conn):
         row = conn.execute(select(workspaces).where(workspaces.c.id == "main")).mappings().one()
@@ -323,8 +344,7 @@ class Store:
         statement = self._actor_statement(token).add_columns(
             workspaces.c.revision.label("workspace_revision"), payload.label("workspace_payload")
         ).join(workspaces, workspaces.c.id == "main")
-        with self._read_connection() as conn:
-            row = conn.execute(statement).mappings().first()
+        row = self._read_one(statement)
         if not row:
             raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
         revision = row["workspace_revision"]
@@ -344,8 +364,7 @@ class Store:
         # permissions are still checked against the database on every read.
         if self._initialized:
             return True
-        with self._read_connection() as conn:
-            ready = conn.execute(select(users.c.id).limit(1)).first() is not None
+        ready = self._read_one(select(users.c.id).limit(1)) is not None
         self._initialized = ready
         return ready
 
@@ -402,7 +421,7 @@ class Store:
         return select(*[column for column in users.c if column.name != "password_hash"]).select_from(
             users.join(sessions, users.c.id == sessions.c.user_id)).where(
             sessions.c.token_hash == hashlib.sha256(token.encode()).hexdigest(),
-            sessions.c.expires > time.time(), users.c.active.is_(True))
+            sessions.c.expires > bindparam("session_now", callable_=time.time), users.c.active.is_(True))
 
     def _actor(self, conn, token):
         row = conn.execute(self._actor_statement(token)).mappings().first()
@@ -411,8 +430,10 @@ class Store:
         return dict(row)
 
     def actor(self, token):
-        with self._read_connection() as conn:
-            return self._actor(conn, token)
+        row = self._read_one(self._actor_statement(token))
+        if not row:
+            raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
+        return dict(row)
 
     @staticmethod
     def can_edit(actor):

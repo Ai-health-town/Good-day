@@ -237,12 +237,13 @@ def tasks_page(store, token, state, actor):
     metrics(state)
     st.write("")
     with st.form("quick_task", clear_on_submit=True):
-        a, b, c, d, e = st.columns([3.4, 1.6, 1.5, 1.4, 1])
+        a, b, c, d, e = st.columns([3.4, 1.6, 1.5, 2, 1])
         title = a.text_input("مهمة سريعة", placeholder="ما الخطوة التالية؟")
         with b:
             assignee = record_picker("إسناد إلى", state["members"], actor["member_id"])
         due = c.date_input("الاستحقاق", value=date.fromisoformat(today_iso()))
-        due_time = d.time_input("الوقت — الرياض", value=None, step=60)
+        due_time = d.time_input("الوقت — الرياض", value=None, step=60, format="12h", disabled=not store.can_edit(actor))
+        d.caption("AM صباحًا · PM مساءً")
         with e:
             st.write("")
             add = st.form_submit_button("إضافة", disabled=not store.can_edit(actor), width="stretch")
@@ -335,7 +336,7 @@ def tasks_page(store, token, state, actor):
                 "المرحلة": st.column_config.SelectboxColumn(options=list(STATUSES.values()), required=True),
                 "الأولوية": st.column_config.SelectboxColumn(options=list(PRIORITIES.values()), required=True),
                 "الموعد": st.column_config.DateColumn(format="YYYY-MM-DD"),
-                "وقت الاستحقاق": st.column_config.TimeColumn(format="HH:mm", step=60, help="بتوقيت الرياض؛ اتركه فارغًا للمهمة التي لا تحتاج ساعة محددة."),
+                "وقت الاستحقاق": st.column_config.TimeColumn(format="hh:mm A", step=60, help="بتوقيت الرياض؛ AM صباحًا وPM مساءً. اتركه فارغًا للمهمة التي لا تحتاج ساعة محددة."),
                 "تنبيه صوتي": st.column_config.CheckboxColumn(),
                 "قبل (دقيقة)": st.column_config.SelectboxColumn(options=list(REMINDER_OPTIONS), required=True),
                 "دقيقة": st.column_config.NumberColumn(min_value=0,max_value=100000,step=15)}, key="grid_" + view_key)

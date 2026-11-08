@@ -163,7 +163,8 @@ def edit_task(store, token, state, actor, original=None):
             project = record_picker("المشروع", state["projects"], task.get("projectId"), empty=False)
             status = enum_picker("حالة المهمة", STATUSES, task.get("status"))
             due = st.date_input("موعد المهمة", value=date.fromisoformat(task["dueDate"]) if task.get("dueDate") else None)
-            due_time = st.time_input("وقت الاستحقاق — بتوقيت الرياض", value=time.fromisoformat(task["dueTime"]) if task.get("dueTime") else None, step=60, disabled=not editable)
+            due_time = st.time_input("وقت الاستحقاق — بتوقيت الرياض", value=time.fromisoformat(task["dueTime"]) if task.get("dueTime") else None, step=60, format="12h", disabled=not editable)
+            st.caption("AM صباحًا · PM مساءً")
         with b:
             assignee = record_picker("المسؤول عن المهمة", state["members"], task.get("assigneeId"))
             priority = enum_picker("أولوية المهمة", PRIORITIES, task.get("priority"))

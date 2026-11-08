@@ -17,12 +17,14 @@ def flash(message):
     st.rerun()
 
 
-def perform(call, message="تم الحفظ"):
+def perform(call, message="تم الحفظ", *, reopen_task=None):
     try:
         call()
     except WorkspaceError as exc:
         st.error(str(exc))
         return False
+    if reopen_task:
+        st.session_state["search_target"] = ("tasks", reopen_task)
     flash(message)
 
 
@@ -140,24 +142,55 @@ def edit_task(store, token, state, actor, original=None):
             perform(save_task, "حُفظت المهمة")
     if not original:
         return
+    if actor["role"] in ("admin", "manager"):
+        with st.popover("حذف المهمة", icon=":material/delete:", key="delete_task_" + task["id"]):
+            st.write("حذف المهمة: " + task["title"])
+            st.caption("يشمل الحذف خطوات المهمة وتعليقاتها. الملفات المرتبطة تبقى في المكتبة.")
+            confirmed = st.checkbox("تأكيد حذف هذه المهمة", key="confirm_task_" + task["id"] + "_" + str(task.get("version", 1)))
+            if st.button("حذف المهمة نهائيًا", disabled=not confirmed, key="remove_task_" + task["id"]):
+                perform(lambda: store.remove(token, "tasks", original["id"], original.get("version", 1)), "حُذفت المهمة")
     st.markdown("**الخطوات الفرعية**")
     subtasks = task.get("subtasks", [])
+    if not subtasks:
+        st.caption("لا توجد خطوات فرعية بعد.")
     for sub in subtasks:
-        checked = st.checkbox(str(sub.get("text", "")), value=bool(sub.get("done")), key="sub_" + str(sub.get("id")), disabled=not editable)
+        subkey = task["id"] + "_" + str(sub.get("id")) + "_" + str(task.get("version", 1))
+        check, edit, remove = st.columns([6, 1.2, 1.2], vertical_alignment="center")
+        checked = check.checkbox(str(sub.get("text", "")), value=bool(sub.get("done")), key="sub_" + subkey, disabled=not editable)
         if checked != bool(sub.get("done")):
             modified = copy.deepcopy(original)
             for row in modified["subtasks"]:
                 if row["id"] == sub["id"]:
                     row["done"] = checked
-            perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)))
+            perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "حُدّثت حالة الخطوة", reopen_task=task["id"])
+        if editable:
+            with edit.popover("تعديل", icon=":material/edit:", key="edit_sub_" + subkey):
+                with st.form("edit_sub_form_" + subkey):
+                    subtext = st.text_input("نص الخطوة", str(sub.get("text", "")), max_chars=2000)
+                    if st.form_submit_button("حفظ الخطوة", type="primary"):
+                        if not subtext.strip():
+                            st.error("اكتب نص الخطوة قبل الحفظ.")
+                        else:
+                            modified = copy.deepcopy(original)
+                            for row in modified["subtasks"]:
+                                if row["id"] == sub["id"]:
+                                    row["text"] = subtext.strip()
+                            perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "حُفظ تعديل الخطوة", reopen_task=task["id"])
+            with remove.popover("حذف", icon=":material/delete:", key="delete_sub_" + subkey):
+                st.write("حذف الخطوة: " + str(sub.get("text", "")))
+                confirmed = st.checkbox("تأكيد حذف الخطوة", key="confirm_sub_" + subkey)
+                if st.button("حذف الخطوة نهائيًا", disabled=not confirmed, key="remove_sub_" + subkey):
+                    modified = copy.deepcopy(original)
+                    modified["subtasks"] = [row for row in modified["subtasks"] if row["id"] != sub["id"]]
+                    perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "حُذفت الخطوة الفرعية", reopen_task=task["id"])
     if editable:
-        with st.form("add_subtask", clear_on_submit=True):
+        with st.form("add_subtask_" + task["id"], clear_on_submit=True):
             subtext = st.text_input("إضافة خطوة فرعية", max_chars=2000)
             if st.form_submit_button("إضافة الخطوة"):
                 if subtext.strip():
                     modified = copy.deepcopy(original)
                     modified.setdefault("subtasks", []).append({"id": uid("st_"), "text": subtext.strip(), "done": False})
-                    perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)))
+                    perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "أُضيفت الخطوة الفرعية", reopen_task=task["id"])
     st.markdown("**التعليقات**")
     for comment in task.get("comments", []):
         st.caption(lookup(state["members"], comment.get("authorId")) + " · " + str(comment.get("time", "")))
@@ -169,11 +202,6 @@ def edit_task(store, token, state, actor, original=None):
                 modified = copy.deepcopy(original)
                 modified.setdefault("comments", []).append({"id": uid("c_"), "text": text.strip(), "authorId": actor["member_id"], "time": now_iso()})
                 perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)))
-    if actor["role"] in ("admin", "manager"):
-        with st.expander("حذف المهمة"):
-            confirmed = st.checkbox("تأكيد حذف هذه المهمة")
-            if st.button("حذف المهمة نهائيًا", disabled=not confirmed):
-                perform(lambda: store.remove(token, "tasks", original["id"], original.get("version", 1)), "حُذفت المهمة")
 
 
 @st.dialog("بيانات السجل", width="large")

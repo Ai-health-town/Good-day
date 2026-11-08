@@ -17,13 +17,15 @@ def flash(message):
     st.rerun()
 
 
-def perform(call, message="تم الحفظ", *, reopen_task=None):
+def perform(call, message="تم الحفظ", *, reopen_task=None, reopen_record=None):
     try:
         call()
     except WorkspaceError as exc:
         st.error(str(exc))
         return False
-    if reopen_task:
+    if reopen_record:
+        st.session_state["search_target"] = reopen_record
+    elif reopen_task:
         st.session_state["search_target"] = ("tasks", reopen_task)
     flash(message)
 
@@ -43,6 +45,30 @@ def record_picker(label, records, value="", empty=True, key=None):
 def enum_picker(label, choices, value=None, key=None):
     options = list(choices)
     return st.selectbox(label, options, index=options.index(value) if value in options else 0, format_func=choices.get, key=key)
+
+
+def record_comments(store, token, state, actor, collection, original, editable):
+    for index, comment in enumerate(original.get("comments", [])):
+        key = collection + "_" + original["id"] + "_" + str(index) + "_" + str(original.get("version", 1))
+        with st.container(border=True):
+            body, action = st.columns([7, 1.4], vertical_alignment="top")
+            label = lookup(state["members"], comment.get("authorId")) + " · " + str(comment.get("time", ""))
+            if comment.get("editedAt"):
+                label += " · مُعدّل"
+            body.caption(label)
+            body.text(str(comment.get("text", "")))
+            if editable:
+                with action.popover("تعديل", icon=":material/edit:", key="edit_comment_" + key):
+                    with st.form("edit_comment_form_" + key):
+                        text = st.text_area("نص التعليق", str(comment.get("text", "")), max_chars=5000, height=130)
+                        if st.form_submit_button("حفظ تعديل التعليق", type="primary"):
+                            if not text.strip():
+                                st.error("اكتب نص التعليق قبل الحفظ.")
+                            else:
+                                modified = copy.deepcopy(original)
+                                modified["comments"][index].update(text=text.strip(), editedAt=now_iso(), editedBy=actor["member_id"])
+                                perform(lambda: store.put(token, collection, modified, original.get("version", 1)),
+                                        "حُفظ تعديل التعليق", reopen_record=(collection, original["id"]))
 
 
 def end_session(store, token, all_sessions=False):
@@ -192,16 +218,14 @@ def edit_task(store, token, state, actor, original=None):
                     modified.setdefault("subtasks", []).append({"id": uid("st_"), "text": subtext.strip(), "done": False})
                     perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "أُضيفت الخطوة الفرعية", reopen_task=task["id"])
     st.markdown("**التعليقات**")
-    for comment in task.get("comments", []):
-        st.caption(lookup(state["members"], comment.get("authorId")) + " · " + str(comment.get("time", "")))
-        st.text(str(comment.get("text", "")))
+    record_comments(store, token, state, actor, "tasks", original, editable)
     if editable:
         with st.form("task_comment", clear_on_submit=True):
             text = st.text_area("تعليق على المهمة", max_chars=5000)
             if st.form_submit_button("إضافة التعليق") and text.strip():
                 modified = copy.deepcopy(original)
                 modified.setdefault("comments", []).append({"id": uid("c_"), "text": text.strip(), "authorId": actor["member_id"], "time": now_iso()})
-                perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)))
+                perform(lambda: store.put(token, "tasks", modified, original.get("version", 1)), "أُضيف التعليق", reopen_task=task["id"])
 
 
 @st.dialog("بيانات السجل", width="large")
@@ -365,16 +389,14 @@ def file_working_copy(store,token,state,actor,original,record,editable,original_
 
 def file_comments(store,token,state,actor,original,editable):
     st.markdown("**تعليقات الفريق**")
-    for comment in original.get("comments", []):
-        st.caption(lookup(state["members"], comment.get("authorId")) + " · " + str(comment.get("time", "")))
-        st.text(str(comment.get("text", "")))
+    record_comments(store, token, state, actor, "files", original, editable)
     if editable:
         with st.form("file_comment", clear_on_submit=True):
             text = st.text_area("تعليق على الملف", max_chars=5000)
             if st.form_submit_button("إرسال تعليق الملف") and text.strip():
                 updated = copy.deepcopy(original)
                 updated.setdefault("comments", []).append({"id": uid(), "text": text.strip(), "authorId": actor["member_id"], "time": now_iso()})
-                perform(lambda: store.put(token, "files", updated, original.get("version", 1)))
+                perform(lambda: store.put(token, "files", updated, original.get("version", 1)), "أُضيف التعليق", reopen_record=("files", original["id"]))
     if actor["role"] in ("admin", "manager"):
         with st.expander("حذف الملف"):
             confirmed = st.checkbox("تأكيد حذف الملف")

@@ -17,7 +17,7 @@ from ai_store import normalize_actions
 from filetools import tasks_excel
 from migration import build_merge
 from task_reminders import reminders_html
-from task_schedule import RIYADH, ScheduleError, due_at, due_label, is_overdue, reminder_items, validate_schedule
+from task_schedule import RIYADH, ScheduleError, clock_parts, clock_value, due_at, due_label, is_overdue, reminder_items, validate_schedule
 from tests.test_ui import healthy, element
 from tests.test_workspace import workspace, task
 from workspace import Conflict, WorkspaceError, prepare_import
@@ -25,6 +25,41 @@ from workspace import Conflict, WorkspaceError, prepare_import
 
 def scheduled(**changes):
     return task("timed") | {"dueDate": "2026-11-08", "dueTime": "11:00", "reminderEnabled": True, "reminderMinutes": 15} | changes
+
+
+@pytest.mark.parametrize("clock,period,stored", [("12:00", "صباحًا", "00:00"), ("12:00", "مساءً", "12:00"),
+    ("07:00", "مساءً", "19:00"), ("٠٧:٣٠", "مساءً", "19:30"), ("۷:۳۰", "صباحًا", "07:30"), ("", "مساءً", "")])
+def test_arabic_day_period_preserves_midnight_noon_and_optional_time(clock, period, stored):
+    assert clock_value(clock, period) == stored
+    if stored:
+        displayed, selected = clock_parts(stored)
+        assert clock_value(displayed, selected) == stored
+
+
+@pytest.mark.parametrize("clock", ["00:30", "13:00", "07:60", "7:3", "not a time"])
+def test_invalid_12_hour_times_are_rejected(clock):
+    with pytest.raises(ScheduleError):
+        clock_value(clock, "صباحًا")
+
+
+def test_changing_only_arabic_period_saves_and_reopens_the_correct_task_time(workspace, monkeypatch):
+    from tests.test_task_actions import dialog, seed_task
+    store, owner = workspace
+    seed_task(store, owner)
+    original = store.read(owner)[0]["tasks"][0]
+    app = dialog(store, owner, monkeypatch)
+    assert element(app.text_input, "وقت الاستحقاق — بتوقيت الرياض").value == "02:30"
+    assert element(app.selectbox, "صباح / مساء").value == "مساءً"
+    element(app.selectbox, "صباح / مساء").set_value("صباحًا")
+    element(app.button, "حفظ المهمة").click().run()
+    healthy(app)
+    saved = store.read(owner)[0]["tasks"][0]
+    assert saved["dueTime"] == "02:30"
+    for field in ("comments", "subtasks", "reminderEnabled", "reminderMinutes", "dueDate", "attachedFileId"):
+        assert saved[field] == original[field]
+    reopened = dialog(store, owner, monkeypatch)
+    assert element(reopened.text_input, "وقت الاستحقاق — بتوقيت الرياض").value == "02:30"
+    assert element(reopened.selectbox, "صباح / مساء").value == "صباحًا"
 
 
 @pytest.mark.parametrize("changes", [{"dueTime": "25:00"}, {"dueTime": "9:00"}, {"dueTime": "13:67"},
@@ -123,7 +158,8 @@ edit_task(store,token,state,actor)
     app.session_state["token"] = owner
     app.run()
     element(app.text_input, "عنوان المهمة").set_value("موعد اجتماع")
-    app.time_input[0].set_value(time(14, 30))
+    element(app.text_input, "وقت الاستحقاق — بتوقيت الرياض").set_value("02:30")
+    element(app.selectbox, "صباح / مساء").set_value("مساءً")
     element(app.checkbox, "تنبيه صوتي للمهمة").check()
     element(app.selectbox, "التنبيه قبل").set_value(5)
     element(app.button, "حفظ المهمة").click().run()
@@ -136,7 +172,7 @@ edit_task(store,token,state,actor)
     healthy(full)
     assert any("وقت الاستحقاق" in list(grid.value.columns) for grid in full.dataframe)
     view = hashlib.sha256(json.dumps([[saved["id"]], "", "", "كل المهام"]).encode()).hexdigest()[:14]
-    full.session_state["grid_" + view] = {"edited_rows": {0: {"وقت الاستحقاق": "16:45", "قبل (دقيقة)": 30}}, "added_rows": [], "deleted_rows": []}
+    full.session_state["grid_" + view] = {"edited_rows": {0: {"وقت الاستحقاق": "04:45", "صباح / مساء": "مساءً", "قبل (دقيقة)": 30}}, "added_rows": [], "deleted_rows": []}
     element(full.button, "حفظ تعديلات الجدول").click().run()
     healthy(full)
     edited = store.read(owner)[0]["tasks"][0]

@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 import os
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 
 import extra_streamlit_components as stx
@@ -18,10 +18,10 @@ from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSE
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
 from migration import build_merge
 from components import (flash, perform, lookup, record_picker, enum_picker, end_session,
-                        end_day, account_settings, edit_task, task_delete_control, edit_directory, edit_file,
+                        end_day, account_settings, edit_task, task_time_input, task_delete_control, edit_directory, edit_file,
                         chat_page, members_page, activity_page, directory_page)
 from theme import inject, safe, welcome, panel, empty
-from task_schedule import REMINDER_OPTIONS, due_label, is_overdue
+from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value, due_label, is_overdue
 
 st.set_page_config(page_title="G'day | مساحة العمل", page_icon="✳", layout="wide", initial_sidebar_state="expanded")
 inject()
@@ -237,13 +237,13 @@ def tasks_page(store, token, state, actor):
     metrics(state)
     st.write("")
     with st.form("quick_task", clear_on_submit=True):
-        a, b, c, d, e = st.columns([3.4, 1.6, 1.5, 2, 1])
+        a, b, c, d, e = st.columns([3.4, 1.6, 1.5, 2.6, 1])
         title = a.text_input("مهمة سريعة", placeholder="ما الخطوة التالية؟")
         with b:
             assignee = record_picker("إسناد إلى", state["members"], actor["member_id"])
         due = c.date_input("الاستحقاق", value=date.fromisoformat(today_iso()))
-        due_time = d.time_input("الوقت — الرياض", value=None, step=60, format="12h", disabled=not store.can_edit(actor))
-        d.caption("AM صباحًا · PM مساءً")
+        with d:
+            due_clock, due_period = task_time_input("الوقت — الرياض", key="quick_due", disabled=not store.can_edit(actor))
         with e:
             st.write("")
             add = st.form_submit_button("إضافة", disabled=not store.can_edit(actor), width="stretch")
@@ -252,7 +252,7 @@ def tasks_page(store, token, state, actor):
         reminder_minutes = lead.selectbox("التنبيه قبل", list(REMINDER_OPTIONS), index=3, format_func=REMINDER_OPTIONS.get, key="quick_reminder_minutes", disabled=not store.can_edit(actor))
         if add and title.strip():
             perform(lambda: store.put(token, "tasks", {"id": uid("t_"), "title": title.strip(), "projectId": state["projects"][0]["id"], "assigneeId": assignee,
-                "status": "todo", "priority": "medium", "dueDate": due.isoformat() if due else "", "dueTime": due_time.strftime("%H:%M") if due_time else "",
+                "status": "todo", "priority": "medium", "dueDate": due.isoformat() if due else "", "dueTime": clock_value(due_clock, due_period),
                 "reminderEnabled": reminder_enabled, "reminderMinutes": reminder_minutes,
                 "estimatedMinutes": 30, "notes": "", "comments": [], "subtasks": []}), "أُضيفت المهمة")
     a, b, c = st.columns([2, 1.4, 1.3])
@@ -324,7 +324,8 @@ def tasks_page(store, token, state, actor):
     reverse_owners = {value: key for key, value in owners.items()}
     frame = pd.DataFrame([{ "المهمة": t["title"], "المسؤول": owners.get(t.get("assigneeId", ""), "غير معين"), "المرحلة": STATUSES.get(t.get("status"), "جديدة"),
         "الأولوية": PRIORITIES.get(t.get("priority"), "عادية"), "الموعد": date.fromisoformat(t["dueDate"]) if t.get("dueDate") else None,
-        "وقت الاستحقاق": datetime.strptime(t["dueTime"], "%H:%M").time() if t.get("dueTime") else None,
+        "وقت الاستحقاق": time.fromisoformat(clock_parts(t["dueTime"])[0]) if t.get("dueTime") else None,
+        "صباح / مساء": clock_parts(t.get("dueTime", ""))[1],
         "تنبيه صوتي": t.get("reminderEnabled", False), "قبل (دقيقة)": t.get("reminderMinutes", 15),
         "دقيقة": int(t.get("estimatedMinutes") or 0), "جهة التواصل": lookup(state["stakeholders"], t.get("stakeholderId"), "—") } for t in baseline])
     with st.form("table_" + view_key):
@@ -336,7 +337,8 @@ def tasks_page(store, token, state, actor):
                 "المرحلة": st.column_config.SelectboxColumn(options=list(STATUSES.values()), required=True),
                 "الأولوية": st.column_config.SelectboxColumn(options=list(PRIORITIES.values()), required=True),
                 "الموعد": st.column_config.DateColumn(format="YYYY-MM-DD"),
-                "وقت الاستحقاق": st.column_config.TimeColumn(format="hh:mm A", step=60, help="بتوقيت الرياض؛ AM صباحًا وPM مساءً. اتركه فارغًا للمهمة التي لا تحتاج ساعة محددة."),
+                "وقت الاستحقاق": st.column_config.TimeColumn(format="HH:mm", min_value=time(1), max_value=time(12, 59), step=60, help="ساعة ودقيقة بنظام ١٢ ساعة بتوقيت الرياض؛ حدد صباحًا أو مساءً في الخانة المجاورة."),
+                "صباح / مساء": st.column_config.SelectboxColumn(options=list(DAY_PERIODS), required=True),
                 "تنبيه صوتي": st.column_config.CheckboxColumn(),
                 "قبل (دقيقة)": st.column_config.SelectboxColumn(options=list(REMINDER_OPTIONS), required=True),
                 "دقيقة": st.column_config.NumberColumn(min_value=0,max_value=100000,step=15)}, key="grid_" + view_key)
@@ -349,6 +351,10 @@ def tasks_page(store, token, state, actor):
             due_text = raw_due.isoformat()[:10] if pd.notna(raw_due) else ""
             raw_time = row["وقت الاستحقاق"]
             time_text = raw_time.strftime("%H:%M") if pd.notna(raw_time) and hasattr(raw_time, "strftime") else str(raw_time)[:5] if pd.notna(raw_time) else ""
+            try:
+                time_text = clock_value(time_text, row["صباح / مساء"])
+            except ScheduleError as exc:
+                st.error(str(exc)); return
             proposed = {"title": str(row["المهمة"]).strip(), "assigneeId": reverse_owners.get(row["المسؤول"], ""),
                 "status": {v:k for k,v in STATUSES.items()}[row["المرحلة"]], "priority": {v:k for k,v in PRIORITIES.items()}[row["الأولوية"]],
                 "dueDate": due_text, "dueTime": time_text, "reminderEnabled": bool(row["تنبيه صوتي"]),

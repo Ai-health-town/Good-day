@@ -2,13 +2,13 @@
 import base64
 import copy
 import json
-from datetime import date, time
+from datetime import date
 from pathlib import Path
 import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
 from contacttools import phone_parts, phone_html, matches_contact
-from task_schedule import REMINDER_OPTIONS
+from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
 COOKIE = "gday_session_v2"
 
@@ -20,7 +20,7 @@ def flash(message):
 def perform(call, message="تم الحفظ", *, reopen_task=None, reopen_record=None, refresh_tasks=False):
     try:
         call()
-    except WorkspaceError as exc:
+    except (WorkspaceError, ScheduleError) as exc:
         st.error(str(exc))
         return False
     if refresh_tasks:
@@ -47,6 +47,15 @@ def record_picker(label, records, value="", empty=True, key=None):
 def enum_picker(label, choices, value=None, key=None):
     options = list(choices)
     return st.selectbox(label, options, index=options.index(value) if value in options else 0, format_func=choices.get, key=key)
+
+
+def task_time_input(label, value="", *, key, disabled=False):
+    clock, period = clock_parts(value)
+    clock_slot, period_slot = st.columns([1.6, 1])
+    clock = clock_slot.text_input(label, clock, placeholder="07:30", max_chars=5, disabled=disabled,
+                                 help="الساعة من ١ إلى ١٢ والدقائق من ٠٠ إلى ٥٩. اتركه فارغًا إذا لم تحدد وقتًا.", key=key + "_clock")
+    period = period_slot.selectbox("صباح / مساء", DAY_PERIODS, index=DAY_PERIODS.index(period), disabled=disabled, key=key + "_period")
+    return clock, period
 
 
 def task_delete_control(store, token, actor, task, *, key, slot=st):
@@ -163,8 +172,8 @@ def edit_task(store, token, state, actor, original=None):
             project = record_picker("المشروع", state["projects"], task.get("projectId"), empty=False)
             status = enum_picker("حالة المهمة", STATUSES, task.get("status"))
             due = st.date_input("موعد المهمة", value=date.fromisoformat(task["dueDate"]) if task.get("dueDate") else None)
-            due_time = st.time_input("وقت الاستحقاق — بتوقيت الرياض", value=time.fromisoformat(task["dueTime"]) if task.get("dueTime") else None, step=60, format="12h", disabled=not editable)
-            st.caption("AM صباحًا · PM مساءً")
+            due_clock, due_period = task_time_input("وقت الاستحقاق — بتوقيت الرياض", task.get("dueTime", ""),
+                                                   key="due_" + task["id"] + "_" + str(task.get("version", 0)), disabled=not editable)
         with b:
             assignee = record_picker("المسؤول عن المهمة", state["members"], task.get("assigneeId"))
             priority = enum_picker("أولوية المهمة", PRIORITIES, task.get("priority"))
@@ -178,10 +187,11 @@ def edit_task(store, token, state, actor, original=None):
         notes = st.text_area("ملاحظات المهمة", task.get("notes", ""), height=100)
         if st.form_submit_button("حفظ المهمة", type="primary", disabled=not editable, width="stretch"):
             task.update(title=title.strip(), projectId=project, assigneeId=assignee, status=status, priority=priority,
-                        dueDate=due.isoformat() if due else "", dueTime=due_time.strftime("%H:%M") if due_time else "",
+                        dueDate=due.isoformat() if due else "",
                         reminderEnabled=reminder_enabled, reminderMinutes=reminder_minutes,
                         estimatedMinutes=minutes, notes=notes, stakeholderId=stakeholder, attachedFileId=file_id)
             def save_task():
+                task["dueTime"] = clock_value(due_clock, due_period)
                 store.put(token, "tasks", task, original.get("version", 1) if original else None)
                 if original is None:
                     st.session_state.pop("task_new_id", None)

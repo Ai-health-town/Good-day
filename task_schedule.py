@@ -4,12 +4,32 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 RIYADH = ZoneInfo("Asia/Riyadh")
+DAY_PERIODS = ("صباحًا", "مساءً")
 REMINDER_OPTIONS = {0: "عند الموعد", 5: "قبل ٥ دقائق", 10: "قبل ١٠ دقائق", 15: "قبل ربع ساعة",
                     30: "قبل نصف ساعة", 60: "قبل ساعة", 120: "قبل ساعتين", 1440: "قبل يوم"}
 
 
 class ScheduleError(ValueError):
     pass
+
+
+def clock_parts(value):
+    """Display a stored 24-hour time as a 12-hour clock and Arabic period."""
+    if not value:
+        return "", DAY_PERIODS[0]
+    hour, minute = map(int, value.split(":"))
+    return f"{hour % 12 or 12:02d}:{minute:02d}", DAY_PERIODS[hour >= 12]
+
+
+def clock_value(clock, period):
+    """Convert the explicit clock/period controls without changing stored times."""
+    clock = str(clock or "").strip().translate(str.maketrans("٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹", "01234567890123456789"))
+    if not clock:
+        return ""
+    if period not in DAY_PERIODS or not re.fullmatch(r"(?:0?[1-9]|1[0-2]):[0-5][0-9]", clock):
+        raise ScheduleError("اكتب الوقت بنظام ١٢ ساعة مثل 07:30، ثم اختر صباحًا أو مساءً.")
+    hour, minute = map(int, clock.split(":"))
+    return f"{hour % 12 + (12 if period == DAY_PERIODS[1] else 0):02d}:{minute:02d}"
 
 
 def validate_schedule(task):

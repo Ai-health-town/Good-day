@@ -25,6 +25,11 @@ header[data-testid=stHeader]{background:transparent;height:2.4rem;}
 .contact-phone,.contact-email{direction:ltr;unicode-bidi:isolate;text-align:right;white-space:nowrap;margin:.6rem 0;}
 .contact-phone bdi,.contact-phone a,.contact-email bdi{direction:ltr;unicode-bidi:isolate;}
 .contact-phone a{color:var(--ink);text-decoration:none;font-weight:600;font-variant-numeric:tabular-nums;}
+/* Keep every contact and its controls in the page; defer off-screen painting. */
+@supports (content-visibility:auto) and (contain-intrinsic-block-size:auto 420px){
+  div[class*="st-key-directory_card_stakeholders_"]{content-visibility:auto;contain-intrinsic-block-size:auto 420px;}
+}
+@media print{div[class*="st-key-directory_card_stakeholders_"]{content-visibility:visible;contain-intrinsic-block-size:none;}}
 .st-key-contact_phone_input input,.st-key-contact_email_input input{direction:ltr!important;unicode-bidi:plaintext!important;text-align:left!important;}
 section[data-testid=stSidebar]{direction:rtl;background:linear-gradient(180deg,#291b34,#191321);border:none;}
 /* Keep Streamlit's zero-width collapsed state so the content fills the page. */

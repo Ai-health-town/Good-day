@@ -310,7 +310,7 @@ def directory_page(store, token, state, actor, collection):
         st.info("لا توجد سجلات في هذا العرض.")
     columns = st.columns(2)
     for index, record in enumerate(records):
-        with columns[index % 2], st.container(border=True):
+        with columns[index % 2], st.container(border=True, key="directory_card_" + collection + "_" + record["id"]):
             st.subheader(record["name"])
             if collection == "projects":
                 st.write(record.get("desc", ""))

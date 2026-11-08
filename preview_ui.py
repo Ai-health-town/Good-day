@@ -20,24 +20,49 @@ def converted_original(raw, suffix, engine_generation):
     return render_office(raw, suffix)
 
 
-def excel_view(record, source, calculated=None):
+def _excel_snapshot(source, calculated, selected=None, first=1, formulas=False):
+    """Return immutable display data; parsed workbooks never leave this call."""
     book, values = None, None
     try:
         book = open_excel(source)
         values = open_excel(calculated or source, values=True)
-        names = [s.title for s in book.worksheets if s.sheet_state == "visible"]
+        sheets = {s.title: (s.max_row, s.max_column) for s in book.worksheets if s.sheet_state == "visible"}
+        selected = selected or next(iter(sheets), None)
+        rendered = sheet_html(book, values, selected, first, 100, formulas) if selected else None
+        return sheets, selected, rendered
+    finally:
+        if book is not None: book.close()
+        if values is not None: values.close()
+
+
+@st.cache_data(show_spinner=False, max_entries=3, ttl=1800)
+def prepared_excel(source, calculated, engine_generation):
+    # Source bytes are obtained through authenticated Store.file_bytes first.
+    return _excel_snapshot(source, calculated)
+
+
+@st.cache_data(show_spinner=False, max_entries=6, ttl=1800)
+def cached_excel_page(source, calculated, selected, first, formulas, engine_generation):
+    return _excel_snapshot(source, calculated, selected, first, formulas)[2]
+
+
+def excel_view(record, source, calculated=None):
+    try:
+        generation = (id(open_excel), id(sheet_html), id(_excel_snapshot))
+        sheets, first_sheet, first_view = prepared_excel(source, calculated, generation)
+        names = list(sheets)
         if not names:
             st.info("لا توجد أوراق ظاهرة في هذا الملف.")
             return
         selected = st.selectbox("ورقة Excel", names, key="preview_sheet_" + record["id"])
-        sheet = book[selected]
+        row_count, column_count = sheets[selected]
         a, b = st.columns([1,2])
-        page = a.number_input("صفحة الصفوف", min_value=1, max_value=max(1,math.ceil(sheet.max_row/100)),
+        page = a.number_input("صفحة الصفوف", min_value=1, max_value=max(1,math.ceil(row_count/100)),
                               step=1, key="preview_page_" + record["id"] + selected)
         formulas = b.checkbox("إظهار الصيغ بدل النتائج", key="preview_formulas_" + record["id"])
         first = (page-1)*100+1
-        html, formula_rows, missing = sheet_html(book,values,selected,first,100,formulas)
-        st.caption(f"الصفوف {first}–{min(sheet.max_row,first+99)} من {sheet.max_row} · {sheet.max_column} أعمدة. للتنسيق المشروط والرسوم وتوزيع الصفحات اختر «تخطيط الطباعة».")
+        html, formula_rows, missing = first_view if selected == first_sheet and first == 1 and not formulas else cached_excel_page(source, calculated, selected, first, formulas, generation)
+        st.caption(f"الصفوف {first}–{min(row_count,first+99)} من {row_count} · {column_count} أعمدة. للتنسيق المشروط والرسوم وتوزيع الصفحات اختر «تخطيط الطباعة».")
         html_component.html(html,height=635,scrolling=False)
         if missing:
             st.warning(f"{missing} خلية بصيغة لا تحتوي نتيجة محفوظة في هذا النطاق. لم تُستبدل بصفر. راجع تخطيط الطباعة أو احفظ الحسابات في Excel ثم ارفع النسخة المحدّثة.")
@@ -46,9 +71,6 @@ def excel_view(record, source, calculated=None):
                 st.dataframe(pd.DataFrame(formula_rows), hide_index=True, width="stretch")
     except WorkspaceError as exc:
         st.warning(str(exc))
-    finally:
-        if book is not None: book.close()
-        if values is not None: values.close()
 
 
 def original_preview(record, raw, working_copy=True):

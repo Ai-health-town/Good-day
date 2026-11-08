@@ -247,7 +247,8 @@ class Store:
         self.remote = database_url.startswith("postgresql+")
         if not self.remote and not database_url.startswith("sqlite:///"):
             raise WorkspaceError("استخدم PostgreSQL للسحابة أو SQLite للتشغيل المحلي.")
-        self.engine = create_engine(database_url, pool_pre_ping=True, hide_parameters=True, connect_args={"timeout": 30, "check_same_thread": False} if not self.remote else {"connect_timeout": 10, "prepare_threshold": None})
+        self.engine = create_engine(database_url, pool_pre_ping=True, hide_parameters=True, skip_autocommit_rollback=self.remote,
+                                    connect_args={"timeout": 30, "check_same_thread": False} if not self.remote else {"connect_timeout": 10, "prepare_threshold": None})
         if not self.remote:
             @event.listens_for(self.engine, "connect")
             def sqlite_options(conn, _):
@@ -284,6 +285,16 @@ class Store:
                 conn.rollback()
                 raise
 
+    @contextmanager
+    def _read_connection(self):
+        # Single-statement reads still authenticate against the live database.
+        # PostgreSQL need not exchange BEGIN/ROLLBACK around each page read.
+        # Returning the connection restores its default transactional settings.
+        with self.engine.connect() as conn:
+            if self.remote:
+                conn = conn.execution_options(isolation_level="AUTOCOMMIT")
+            yield conn
+
     def _state(self, conn):
         row = conn.execute(select(workspaces).where(workspaces.c.id == "main")).mappings().one()
         return json.loads(row["payload"]), row["revision"]
@@ -312,7 +323,7 @@ class Store:
         statement = self._actor_statement(token).add_columns(
             workspaces.c.revision.label("workspace_revision"), payload.label("workspace_payload")
         ).join(workspaces, workspaces.c.id == "main")
-        with self.engine.connect() as conn:
+        with self._read_connection() as conn:
             row = conn.execute(statement).mappings().first()
         if not row:
             raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
@@ -333,7 +344,7 @@ class Store:
         # permissions are still checked against the database on every read.
         if self._initialized:
             return True
-        with self.engine.connect() as conn:
+        with self._read_connection() as conn:
             ready = conn.execute(select(users.c.id).limit(1)).first() is not None
         self._initialized = ready
         return ready
@@ -400,7 +411,7 @@ class Store:
         return dict(row)
 
     def actor(self, token):
-        with self.engine.connect() as conn:
+        with self._read_connection() as conn:
             return self._actor(conn, token)
 
     @staticmethod

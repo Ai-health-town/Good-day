@@ -253,3 +253,52 @@ def test_refresh_and_initial_chat_use_a_single_live_workspace_query(workspace, m
     assert len(queries) == 1
     if page == "المهام":
         assert app.dataframe[0].value.iloc[0]["المهمة"] == "آخر تعديل من زميل"
+
+
+def test_remote_reads_use_autocommit_without_leaking_it_into_writes(workspace):
+    store, token = workspace
+    store.remote = True  # Exercise the remote read path against the local fixture.
+    try:
+        with store._read_connection() as conn:
+            assert conn.get_execution_options()["isolation_level"] == "AUTOCOMMIT"
+        with store.transaction() as conn:
+            assert conn.get_execution_options().get("isolation_level") != "AUTOCOMMIT"
+        store.put(token, "tasks", task("transactional"))
+        before, revision = store.read(token)
+        with pytest.raises(RuntimeError):
+            with store.transaction() as conn:
+                changed = copy.deepcopy(before)
+                changed["tasks"][0]["title"] = "لا يُحفظ"
+                store._save(conn, changed, revision)
+                raise RuntimeError("rollback")
+        assert store.read(token) == (before, revision)
+    finally:
+        store.remote = False
+
+
+def test_remote_read_path_still_checks_live_sessions_and_latest_data(workspace):
+    store, token = workspace
+    store.remote = True
+    try:
+        store.context(token)
+        other = Store(str(store.engine.url))
+        other.put(token, "tasks", task("another_worker"))
+        assert store.context(token)[0]["tasks"][0]["id"] == "another_worker"
+        other.logout(token)
+        for read in (store.context, store.actor, store.read):
+            with pytest.raises(Forbidden): read(token)
+    finally:
+        store.remote = False
+
+
+def test_postgres_driver_skips_only_autocommit_rollbacks():
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from sqlalchemy.dialects.postgresql.psycopg import PGDialect_psycopg
+    dialect = PGDialect_psycopg(skip_autocommit_rollback=True)
+    connection = SimpleNamespace(autocommit=True, rollback=Mock())
+    dialect.do_rollback(connection)
+    connection.rollback.assert_not_called()
+    connection.autocommit = False
+    dialect.do_rollback(connection)
+    connection.rollback.assert_called_once()

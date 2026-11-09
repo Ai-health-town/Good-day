@@ -318,6 +318,57 @@ def test_authenticated_navigation_does_not_wait_for_the_cookie_component(workspa
     healthy(app)
 
 
+@pytest.mark.parametrize("page,label,collection", [
+    ("الملفات", "بحث في الملفات", "files"),
+    ("الجهات", "بحث في دليل الجهات والأشخاص", "stakeholders"),
+])
+def test_local_filter_reruns_only_its_fragment_and_full_refresh_gets_new_work(
+    workspace, monkeypatch, page, label, collection
+):
+    from dataclasses import replace
+    from streamlit.testing.v1.local_script_runner import LocalScriptRunner
+    store, token = workspace
+    field = "title" if collection == "files" else "name"
+    for ident, name in (("target", "هدف"), ("other", "سجل آخر")):
+        store.put(token, collection, {"id": ident, field: name, "type": "doc", "text": "نص", "projectId": "p_general"})
+    app = platform(store, token, monkeypatch, page)
+    search = element(app.text_input, label)
+    metadata = app._session_state._state._get_widget_metadata(search.id)
+    assert metadata.fragment_id
+    latest = store.read(token)[0][collection][0]
+    store.put(token, collection, latest | {field: "هدف محدث"}, latest["version"])
+    queries = []
+    def capture(conn, cursor, statement, parameters, context, many):
+        if statement.lstrip().upper().startswith("SELECT") and "gday_" in statement:
+            queries.append(statement)
+    event.listen(Engine, "before_cursor_execute", capture)
+    original = LocalScriptRunner.request_rerun
+    def fragment_rerun(runner, data):
+        target = replace(data, fragment_id_queue=[metadata.fragment_id])
+        # A fresh AppTest runner starts with a pending full run. Replace that
+        # bootstrap request too, otherwise it overrides the browser-style event.
+        runner._requests._rerun_data = target
+        return original(runner, target)
+    try:
+        # AppTest otherwise simulates a full script run. Send the same fragment
+        # routing metadata as a real browser interaction for this performance check.
+        with monkeypatch.context() as patch:
+            patch.setattr(LocalScriptRunner, "request_rerun", fragment_rerun)
+            search.set_value("هدف").run()
+        healthy(app)
+        assert not queries
+        shown = [x.value for x in app.markdown] + [x.value for x in app.subheader]
+        assert any("هدف" in x for x in shown)
+        assert not any("سجل آخر" in x for x in shown)
+        app.run()  # The existing refresh/navigation path always reads live data.
+        healthy(app)
+        assert len(queries) == 1
+        shown = [x.value for x in app.markdown] + [x.value for x in app.subheader]
+        assert any("هدف محدث" in x for x in shown)
+    finally:
+        event.remove(Engine, "before_cursor_execute", capture)
+
+
 @pytest.mark.parametrize("original_excel", [False, True])
 def test_spreadsheet_working_copy_generates_an_authenticated_export_only_on_download(
     workspace, workbook_bytes, monkeypatch, original_excel

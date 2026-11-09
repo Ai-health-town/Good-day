@@ -80,6 +80,18 @@ def task_delete_control(store, token, actor, task, *, key, slot=st):
             perform(lambda: store.remove(token, "tasks", task["id"], task.get("version", 1)), "حُذفت المهمة", refresh_tasks=True)
 
 
+def file_delete_control(store, token, actor, record, *, slot=st):
+    if actor["role"] not in ("admin", "manager"):
+        return
+    suffix = record["id"] + "_" + str(record.get("version", 1))
+    with slot.popover("حذف الملف", icon=":material/delete:", width="stretch", key="delete_file_" + suffix):
+        st.write("حذف الملف: " + record["title"])
+        st.caption("يُحذف الملف من المكتبة وروابطه بالمهام والدردشات. تُحفظ نقطة رجوع قبل الحذف.")
+        confirmed = st.checkbox("تأكيد حذف الملف", key="confirm_file_" + suffix)
+        if st.button("حذف الملف من المكتبة", disabled=not confirmed, key="remove_file_" + suffix):
+            perform(lambda: store.remove(token, "files", record["id"], record.get("version", 1)), "حُذف الملف من المكتبة")
+
+
 def record_comments(store, token, state, actor, collection, original, editable):
     for index, comment in enumerate(original.get("comments", [])):
         key = collection + "_" + original["id"] + "_" + str(index) + "_" + str(original.get("version", 1))
@@ -298,6 +310,7 @@ def edit_directory(store, token, state, actor, collection, original=None):
                 perform(lambda: store.remove(token, collection, original["id"], original.get("version", 1)), "حُذف السجل")
 
 
+@st.fragment
 def directory_page(store, token, state, actor, collection):
     title = "المشاريع" if collection == "projects" else "دليل الجهات والأشخاص"
     st.subheader(title)
@@ -342,20 +355,31 @@ def edit_file(store, token, state, actor, original):
     from preview_ui import original_preview
     record = copy.deepcopy(original)
     editable = store.can_edit(actor)
-    st.subheader(record["title"])
+    if actor["role"] in ("admin", "manager"):
+        heading, actions = st.columns([4.5, 1.5], vertical_alignment="center")
+        heading.subheader(record["title"])
+        file_delete_control(store, token, actor, record, slot=actions)
+    else:
+        st.subheader(record["title"])
+    has_original = bool(record.get("blob") or record.get("object"))
+    if has_original:
+        # Store.file_bytes performs its own live authorization on download.
+        st.download_button("تنزيل الملف الأصلي", lambda: store.file_bytes(token, record["id"]),
+                           file_name=Path(record.get("originalName", record["title"])).name, width="stretch", on_click="ignore")
+    if record.get("legacy") and not has_original:
+        st.info("هذا المحتوى من النسخة السابقة. النسخة السابقة حفظت نصوصًا وجداول فقط؛ يتوفر هنا المحتوى المحفوظ فيها.")
+    modes = (["معاينة الأصل"] if has_original else []) + ["نسخة العمل","التعليقات"]
+    mode = st.segmented_control("مساحة الملف",modes,default=modes[0],selection_mode="single",
+                                key="file_mode_" + record["id"],width="stretch",label_visibility="collapsed") or modes[0]
     original_bytes = None
-    if record.get("blob") or record.get("object"):
+    needs_source = mode == "معاينة الأصل" or (mode == "نسخة العمل" and record.get("type") == "sheet" and
+                                             Path(record.get("originalName", "")).suffix.lower() in (".xlsx", ".xlsm"))
+    if has_original and needs_source:
         try:
             original_bytes = store.file_bytes(token, record["id"])
         except WorkspaceError as exc:
             st.warning(str(exc))
-        else:
-            st.download_button("تنزيل الملف الأصلي", original_bytes, file_name=Path(record.get("originalName", record["title"])).name, width="stretch", on_click="ignore")
-    if record.get("legacy") and not (record.get("blob") or record.get("object")):
-        st.info("هذا المحتوى من النسخة السابقة. النسخة السابقة حفظت نصوصًا وجداول فقط؛ يتوفر هنا المحتوى المحفوظ فيها.")
-    modes = (["معاينة الأصل"] if original_bytes else []) + ["نسخة العمل","التعليقات"]
-    mode = st.segmented_control("مساحة الملف",modes,default=modes[0],selection_mode="single",
-                                key="file_mode_" + record["id"],width="stretch",label_visibility="collapsed") or modes[0]
+            return
     if mode == "معاينة الأصل":
         original_preview(original,original_bytes)
     elif mode == "نسخة العمل":
@@ -426,13 +450,6 @@ def file_comments(store,token,state,actor,original,editable):
                 updated = copy.deepcopy(original)
                 updated.setdefault("comments", []).append({"id": uid(), "text": text.strip(), "authorId": actor["member_id"], "time": now_iso()})
                 perform(lambda: store.put(token, "files", updated, original.get("version", 1)), "أُضيف التعليق", reopen_record=("files", original["id"]))
-    if actor["role"] in ("admin", "manager"):
-        with st.expander("حذف الملف"):
-            confirmed = st.checkbox("تأكيد حذف الملف")
-            if st.button("حذف الملف من المكتبة", disabled=not confirmed):
-                perform(lambda: store.remove(token, "files", original["id"], original.get("version", 1)), "حُذف الملف")
-
-
 @st.dialog("التحكم بالدردشات", width="large")
 def clear_chat_dialog(store, token, state, revision):
     selected = st.selectbox("نطاق الحذف", [""] + [p["id"] for p in state["projects"]], format_func=lambda v: lookup(state["projects"], v, "جميع الدردشات"))

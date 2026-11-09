@@ -554,6 +554,8 @@ class Store:
                 raise WorkspaceError("هذا الملف مرتبط بحساب. أوقف الحساب من إدارة الأعضاء بدل حذفه.")
             if collection == "projects" and len(state["projects"]) == 1:
                 raise WorkspaceError("احتفظ بمشروع واحد على الأقل.")
+            if collection == "files":
+                self._snapshot(conn, state, "قبل حذف ملف: " + str(old.get("title") or ident))
             state[collection] = [x for x in state[collection] if x["id"] != ident]
             # Never cascade-delete tasks, files, or conversations by removing a project.
             if collection == "projects":

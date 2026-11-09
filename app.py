@@ -377,6 +377,7 @@ def tasks_page(store, token, state, actor):
             st.info("لا توجد تغييرات جديدة.")
 
 
+@st.fragment
 def files_page(store, token, state, actor):
     a, b = st.columns([5, 1.3])
     a.subheader("مكتبة الفريق")

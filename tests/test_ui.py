@@ -13,7 +13,7 @@ def healthy(app):
     assert not list(app.error), [x.value for x in app.error]
 
 
-@pytest.mark.parametrize("role", ["admin", "manager", "member", "viewer", "agent"])
+@pytest.mark.parametrize("role", ["admin", "manager", "member", "file_manager", "viewer", "agent"])
 def test_activity_navigation_is_admin_only_and_clears_old_selection(tmp_path, monkeypatch, role):
     from workspace import Store
     url = "sqlite:///" + str(tmp_path / "activity_navigation.db")

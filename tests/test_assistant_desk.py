@@ -215,6 +215,23 @@ def test_provider_limit_is_deferred_durably_and_resumes_without_duplicate_tasks(
     assert repo.list_requests(token, "p_work")[0]["status"] == "complete"
 
 
+def test_delayed_request_keeps_relative_dates_anchored_to_submission(desk, monkeypatch):
+    import ai_service
+    store, token, _, repo = desk
+    ident = submit(desk, question="أضف ثلاث مهام لغد")
+    with store.engine.begin() as conn:
+        conn.execute(update(runs).where(runs.c.id == ident).values(day="2026-11-09"))
+    monkeypatch.setattr(ai_service, "today_iso", lambda: "2026-11-10")
+    job = repo.claim()
+    repo.defer(ident, job["details"]["lease"], 3600, "حد مؤقت")
+    with store.engine.begin() as conn:
+        conn.execute(update(runs).where(runs.c.id == ident).values(started=time.time()-1))
+    resumed = AssistantDesk(Store(str(store.engine.url))).claim()
+    context, _, _, _ = repo.prepare(resumed)
+    assert context["request_date_riyadh"] == context["date_riyadh"] == "2026-11-09"
+    assert context["processing_date_riyadh"] == "2026-11-10"
+
+
 def test_worker_respects_recorded_provider_cooldown_after_restart(desk):
     store, token, _, repo = desk
     ident = submit(desk)
@@ -242,6 +259,56 @@ def test_gateway_recognizes_top_level_daily_spend_limit_and_retry_after():
         NeonAI(AIConfig("https://test.neon.tech", "not-real", "test"), transport).check_inference()
     assert error.value.retry_after == 3600
     assert "اليومي" in str(error.value)
+    assert error.value.kind == "daily_spend"
+
+
+def test_account_daily_cap_without_reset_header_keeps_request_and_does_not_loop(desk):
+    import httpx
+    store, token, _, repo = desk
+    submit(desk)
+    calls = []
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(429, headers={"x-request-id": "support-reference-123"}, json={
+            "error_code": "REQUEST_LIMIT_EXCEEDED", "message": "You've reached your AI Gateway daily spend limit. Credits remain."})
+    client = lambda config: NeonAI(config, httpx.MockTransport(respond))
+    worker = DeskWorker(repo, AIConfig("https://test.neon.tech", "never-store-this-secret", "test-model"), client)
+    worker.kick()
+    for future in list(worker.futures): future.result(timeout=10)
+    worker.kick()
+    for future in list(worker.futures): future.result(timeout=10)
+    worker.close()
+    saved = repo.list_requests(token, "p_work")[0]
+    assert len(calls) == 1
+    assert saved["status"] == "waiting" and saved["details"]["limit_kind"] == "daily_spend"
+    assert saved["details"]["gateway_request_id"] == "support-reference-123"
+    assert saved["details"]["failed_model"] == "test-model"
+    assert "مستقل عن الرصيد" in saved["details"]["error"]
+    assert "never-store-this-secret" not in json.dumps(saved)
+    repo.retry(token, saved["id"])
+    complete(repo, repo.claim())
+    assert len(store.read(token)[0]["tasks"]) == 1
+    assert repo.list_requests(token, "p_work")[0]["details"]["limit_kind"] == ""
+
+
+def test_existing_daily_cap_request_explains_balance_and_retry_time(desk, monkeypatch):
+    import assistant_ui
+    store, token, _, repo = desk
+    submit(desk)
+    job = repo.claim()
+    repo.defer(job["id"], job["details"]["lease"], 3600, "وصلت خدمة الذكاء إلى حد الصرف اليومي لدى Neon.")
+    class PausedWorker:
+        def kick(self): pass
+    monkeypatch.setattr(assistant_ui, "resources", lambda *args: (repo, PausedWorker()))
+    monkeypatch.setenv("DATABASE_URL", str(store.engine.url))
+    monkeypatch.setenv("GDAY_LOCAL_MODE", "true")
+    app = AppTest.from_file(str(Path(__file__).resolve().parents[1]/"app.py"), default_timeout=20)
+    app.session_state["token"] = token
+    app.session_state["navigation"] = "مركز المساعد"
+    app.run(); healthy(app)
+    assert any("مستقل عن الرصيد" in item.value for item in app.warning)
+    assert any("لا يضمن انتهاء القيد" in item.value for item in app.caption)
+    assert element(app.button, "إعادة المحاولة").disabled
 
 
 def test_arabic_filenames_with_underscores_are_selected_automatically(desk):

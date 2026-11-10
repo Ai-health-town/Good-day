@@ -8,7 +8,7 @@ import hashlib
 import pandas as pd
 import streamlit as st
 
-from ai_service import AICreditsRequired, AIConfig, NeonAI, build_context
+from ai_service import AICreditsRequired, AIGatewayLimit, AIConfig, NeonAI, build_context
 from ai_store import AIStore
 from components import lookup, perform
 from workspace import WorkspaceError, Store, now_iso, uid
@@ -167,11 +167,13 @@ def cloud_page(store, token, state, revision, actor, setting):
             checks["ai"] = {"status": "ready", "message": "وصلت إجابة فعلية من النموذج. المساعد جاهز من مركز المساعد.", "at": now_iso()}
         except AICreditsRequired as exc:
             checks["ai"] = {"status": "credits", "message": str(exc), "at": now_iso()}
+        except AIGatewayLimit as exc:
+            checks["ai"] = {"status": exc.kind, "message": str(exc), "request_id": exc.request_id, "at": now_iso()}
         except WorkspaceError as exc:
             checks["ai"] = {"status": "error", "message": str(exc), "at": now_iso()}
     st.caption("فحص التخزين للقراءة فقط. اختبار المساعد يرسل جملة اختبارية قصيرة دون بيانات الفريق وقد يستهلك مقدارًا صغيرًا من رصيد AI.")
     storage_status = {"ready": "نجح الوصول إلى المخزن الخاص", "error": "تعذر الوصول — راجع نتيجة الفحص"}
-    ai_status = {"ready": "جاهز — نجح تشغيل النموذج", "credits": "ينتظر رصيد AI في Neon", "error": "تعذر التشغيل — راجع نتيجة الفحص"}
+    ai_status = {"ready": "جاهز — نجح تشغيل النموذج", "credits": "ينتظر رصيد AI في Neon", "daily_spend": "Neon أوقف التشغيل بسقف الصرف اليومي للحساب", "rate_limit": "حد استخدام مؤقت لدى Neon", "token_rate": "حد الرموز في الدقيقة لدى Neon", "error": "تعذر التشغيل — راجع نتيجة الفحص"}
     with status_area:
         rows = [
             {"الخدمة": "قاعدة البيانات وحسابات الفريق", "الحالة": "متصلة — الحفظ والدخول يعملان" if store.remote else "تجربة محلية — SQLite"},
@@ -183,6 +185,9 @@ def cloud_page(store, token, state, revision, actor, setting):
             if result := checks.get(service):
                 show = st.success if result["status"] == "ready" else st.warning if result["status"] == "credits" else st.error
                 show(result["message"])
+                if result["status"] == "daily_spend":
+                    st.link_button("مراجعة سقف الحساب مع دعم Neon", "https://console.neon.tech/app/projects?modal=support")
+                    if result.get("request_id"): st.caption("معرّف الفحص للدعم: " + result["request_id"])
                 st.caption("آخر فحص في هذه الجلسة: " + result["at"])
     local = [f for f in state["files"] if f.get("blob")]
     cloud = [f for f in state["files"] if f.get("object")]
@@ -227,6 +232,7 @@ GDAY_AI_MAX_OUTPUT_TOKENS = 1800''', language="toml")
             try:
                 models = NeonAI(config).models()
                 st.write(models)
+                if not models: st.warning("لا توجد نماذج مفعّلة للحساب حاليًا. راجع نتيجة اختبار التشغيل لمعرفة السبب؛ تبديل النموذج لا يرفع سقف الحساب.")
                 st.caption("ظهور قائمة النماذج يثبت الوصول إلى البوابة؛ اختبار التشغيل أعلاه يتحقق من إمكانية الحصول على إجابة.")
                 if config.model not in models: st.warning("اسم النموذج المحدد غير ظاهر في القائمة؛ تحقق منه في Neon.")
             except WorkspaceError as exc: st.error(str(exc))

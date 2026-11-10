@@ -27,7 +27,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 ZONE = ZoneInfo("Asia/Riyadh")
 STATUSES = {"todo": "جديدة", "in_progress": "قيد العمل", "waiting_stakeholder": "بانتظار رد", "done": "مكتملة"}
 PRIORITIES = {"urgent": "عاجلة", "high": "مرتفعة", "medium": "عادية", "normal": "منخفضة"}
-ROLES = {"admin": "مدير النظام", "manager": "مشرف الفريق", "member": "عضو", "viewer": "مشاهد", "agent": "مساعد ذكي"}
+ROLES = {"admin": "مدير النظام", "manager": "مشرف الفريق", "member": "عضو", "file_manager": "عضو مع حذف الملفات", "viewer": "مشاهد", "agent": "مساعد ذكي"}
 COLLECTIONS = ("members", "projects", "stakeholders", "tasks", "files", "messages")
 MAX_BACKUP = 30 * 1024 * 1024
 
@@ -437,11 +437,22 @@ class Store:
 
     @staticmethod
     def can_edit(actor):
-        return actor["role"] in ("admin", "manager", "member") or actor["role"] == "agent" and actor["agent_edit"]
+        return actor["role"] in ("admin", "manager", "member", "file_manager") or actor["role"] == "agent" and actor["agent_edit"]
+
+    @staticmethod
+    def can_delete_files(actor):
+        return actor["role"] in ("admin", "manager", "file_manager")
 
     @staticmethod
     def require(actor, permission):
-        okay = Store.can_edit(actor) if permission == "edit" else actor["role"] in ("admin", "manager") if permission == "manage" else actor["role"] == "admin"
+        if permission == "edit":
+            okay = Store.can_edit(actor)
+        elif permission == "delete_files":
+            okay = Store.can_delete_files(actor)
+        elif permission == "manage":
+            okay = actor["role"] in ("admin", "manager")
+        else:
+            okay = actor["role"] == "admin"
         if not okay:
             raise Forbidden("حسابك لا يملك صلاحية تنفيذ هذا الإجراء.")
 
@@ -542,6 +553,8 @@ class Store:
                 self.require(actor, "edit")
                 if actor["role"] == "agent":
                     raise Forbidden("حساب المساعد لا يحذف الدردشات.")
+            elif collection == "files":
+                self.require(actor, "delete_files")
             else:
                 self.require(actor, "manage")
             state, revision = self._state(conn)

@@ -9,7 +9,7 @@ from dataclasses import replace
 import streamlit as st
 from sqlalchemy import select
 
-from ai_service import AIConfig, NeonAI
+from ai_service import AIConfig, NeonAI, DAILY_SPEND_MESSAGE
 from ai_store import threads
 from assistant_desk import ACTIVE, AssistantDesk, DeskWorker
 from components import download_data, edit_file, edit_task, lookup
@@ -30,9 +30,12 @@ def _render_request(desk, worker, store, token, job):
         label = "وصل طلبك إلى gday.assistant" if job["status"] == "queued" else "المساعد يقرأ المطلوب وينفّذه…"
         st.info(label + " يمكنك التنقل؛ النتيجة تبقى محفوظة هنا.")
     elif job["status"] in ("waiting", "failed", "deferred"):
-        st.warning(details.get("error") or "طلبك محفوظ ويحتاج إعادة المحاولة.")
+        daily_spend = details.get("limit_kind") == "daily_spend" or "حد الصرف اليومي" in details.get("error", "")
+        st.warning(DAILY_SPEND_MESSAGE if daily_spend else details.get("error") or "طلبك محفوظ ويحتاج إعادة المحاولة.")
+        if daily_spend:
+            st.caption("هذا سقف على حساب Neon كله، وليس حدًا لعدد طلبات العضو. يلزم تجدد الحد أو رفعه من دعم Neon؛ شراء رصيد إضافي وحده لا يرفع هذا السقف.")
         if job["status"] == "deferred":
-            st.caption("أقرب استكمال: " + datetime.fromtimestamp(job["started"], ZONE).strftime("%I:%M %p") + " بتوقيت الرياض. الاستكمال تلقائي أثناء تشغيل المنصة، وتبقى الطلبات محفوظة إذا أعيد تشغيلها.")
+            st.caption("المحاولة التلقائية القادمة: " + datetime.fromtimestamp(job["started"], ZONE).strftime("%d/%m · %I:%M %p") + " بتوقيت الرياض، وفق المهلة التي أرسلها Neon. هذا موعد إعادة الفحص ولا يضمن انتهاء القيد. طلبك يبقى محفوظًا إذا أعيد تشغيل المنصة.")
         if st.button("إعادة المحاولة", key="desk_retry_" + ident, disabled=job["status"] == "deferred" and job["started"] > time.time()):
             try: desk.retry(token, ident)
             except WorkspaceError as exc: st.error(str(exc))

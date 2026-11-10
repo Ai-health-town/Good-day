@@ -4,6 +4,8 @@ from __future__ import annotations
 import io
 import json
 import re
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from dataclasses import dataclass, field
 
 import httpx
@@ -18,9 +20,29 @@ class AICreditsRequired(WorkspaceError):
 
 
 class AIGatewayLimit(WorkspaceError):
-    def __init__(self, message, retry_after=None):
+    def __init__(self, message, retry_after=None, *, kind="rate_limit", request_id=""):
         super().__init__(message)
         self.retry_after = retry_after
+        self.kind = kind
+        # Only retain an opaque correlation ID, never an upstream body or headers.
+        self.request_id = request_id if re.fullmatch(r"[A-Za-z0-9_.:-]{1,160}", request_id) else ""
+
+
+DAILY_SPEND_MESSAGE = "أوقف Neon تشغيل الذكاء بسبب سقف الصرف اليومي للحساب، وهو مستقل عن الرصيد المتبقي وعدد طلباتك. طلبك محفوظ دون فقدانه."
+
+
+def _retry_seconds(value):
+    try:
+        seconds = int(value)
+    except (ValueError, TypeError):
+        try:
+            reset = parsedate_to_datetime(value)
+            if reset.tzinfo is None:
+                return None
+            seconds = int((reset - datetime.now(timezone.utc)).total_seconds())
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return min(86400, max(1, seconds))
 
 
 @dataclass(frozen=True)
@@ -178,15 +200,16 @@ class NeonAI:
                 body = response.json()
                 error = body.get("error", {})
                 detail = str((error.get("message") if isinstance(error, dict) else error) or body.get("message", "")).lower()
+                reason = str(body.get("unavailable_reason", "")).lower()
             except (ValueError, AttributeError):
-                detail = ""
-            if response.status_code in (402, 403, 429) and "credits" in detail:
+                detail, reason = "", ""
+            if response.status_code in (402, 403, 429) and "daily spend" not in detail and (reason == "credits_required" or any(term in detail for term in ("credits required", "credit balance", "insufficient credits", "out of credits"))):
                 raise AICreditsRequired("وصل الطلب إلى AI Gateway، لكن تشغيل النموذج يحتاج رصيد استدلال. افتح Neon ← Billing ← AI Gateway credits، ثم أعد الاختبار. لا تحتاج تغيير مفاتيح الربط بسبب هذا الخطأ.")
             if response.status_code == 429:
-                try: retry_after = min(86400, max(1, int(response.headers.get("retry-after", ""))))
-                except ValueError: retry_after = None
-                message = "وصلت خدمة الذكاء إلى حد الصرف اليومي لدى Neon. طلبك محفوظ ويستكمل بعد إتاحة الخدمة." if "daily spend" in detail else "خدمة الذكاء مشغولة أو بلغت حد الاستخدام الحالي. طلبك محفوظ حتى تتاح الخدمة."
-                raise AIGatewayLimit(message, retry_after)
+                kind = "daily_spend" if "daily spend" in detail else "token_rate" if "token limit" in detail else "rate_limit"
+                message = DAILY_SPEND_MESSAGE if kind == "daily_spend" else "خدمة الذكاء مشغولة أو بلغت حد الاستخدام المؤقت. طلبك محفوظ حتى تتاح الخدمة."
+                raise AIGatewayLimit(message, _retry_seconds(response.headers.get("retry-after")),
+                                     kind=kind, request_id=response.headers.get("x-request-id", ""))
             messages = {401: "مفتاح AI Gateway غير صالح.", 403: "رفضت البوابة الوصول. تحقق من ai_gateway:invoke والفرع وإتاحة النموذج لخطة حسابك.",
                 429: "بلغت حدود استخدام AI Gateway أو رصيد الحساب؛ راجع Neon ثم أعد المحاولة لاحقًا.",
                 400: "رفضت البوابة إعداد الطلب؛ تحقق من اسم النموذج وتوفره في منطقتك.",
@@ -201,7 +224,7 @@ class NeonAI:
 
     def models(self):
         data = self._request("GET", "models")
-        return [str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str)][:300]
+        return [str(m["id"]) for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str) and m.get("enabled", True) is not False][:300]
 
     def _completion_payload(self, messages, max_tokens=None):
         payload = {"model": self.config.model, "messages": messages,

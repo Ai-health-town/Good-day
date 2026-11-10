@@ -44,10 +44,11 @@ else:
 
 
 @pytest.mark.parametrize("mode", ["معاينة الأصل", "نسخة العمل", "التعليقات"])
-def test_manager_can_delete_an_existing_upload_from_every_file_mode(workspace, monkeypatch, mode):
+@pytest.mark.parametrize("role", ["manager", "file_manager"])
+def test_manager_can_delete_an_existing_upload_from_every_file_mode(workspace, monkeypatch, mode, role):
     store, owner = workspace
     seed(store, owner)
-    _, manager = make_user(store, owner, "manager")
+    _, manager = make_user(store, owner, role)
     before = store.read(owner)[0]
     app = file_dialog(store, manager, monkeypatch, mode)
     assert element(app.button, "حذف الملف من المكتبة").disabled
@@ -75,6 +76,29 @@ def test_file_delete_does_not_expand_unrelated_account_permissions(workspace, mo
         store.remove(token, "files", record["id"], record["version"])
     assert len(store.read(owner)[0]["files"]) == 1
     assert not store.list_snapshots(owner)
+
+
+def test_file_manager_has_member_editing_and_file_deletion_only(workspace):
+    store, owner = workspace
+    record = seed(store, owner)
+    ident, token = make_user(store, owner, "file_manager")
+    assert store.can_edit(store.actor(token))
+    store.put(token, "tasks", task("member-task"))
+    store.put(token, "messages", {"id": "own-message", "text": "رسالتي", "projectId": "p_general"})
+    store.remove(token, "messages", "own-message", 1)
+    for collection, target in [("tasks", "linked-task"), ("projects", "p_general"), ("messages", "linked-message")]:
+        with pytest.raises(Forbidden): store.remove(token, collection, target, 1)
+    for permission in ("manage", "admin"):
+        with pytest.raises(Forbidden): store.require(store.actor(token), permission)
+    with pytest.raises(Forbidden): store.activity(token)
+    with pytest.raises(Forbidden): store.list_users(token)
+    # A live permission check prevents deletion from an already-open dialog.
+    from sqlalchemy import update
+    from workspace import users
+    with store.engine.begin() as conn:
+        conn.execute(update(users).where(users.c.id == ident).values(role="member"))
+    with pytest.raises(Forbidden): store.remove(token, "files", record["id"], record["version"])
+    assert len(store.read(owner)[0]["files"]) == 1
 
 
 def test_stale_file_deletion_keeps_the_latest_file_and_does_not_create_a_snapshot(workspace, monkeypatch):

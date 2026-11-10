@@ -34,6 +34,7 @@ SYSTEM = """أنت gday.assistant، مساعد فريق G'day. أجب بالعر
 لا تحذف، ولا تغيّر حسابات أو صلاحيات أو مفاتيح، ولا ترسل رسائل خارج المنصة، ولا تنفذ كودًا أو SQL.
 لا تزعم أنك هذه المحادثة في ChatGPT أو أنك تعمل خارج الأدوات المتاحة.
 لا تخمن معرفات الأعضاء أو السجلات. تعديلاتك يتحقق منها الخادم ويحفظها تلقائيًا إذا بقيت صلاحية العضو والسجلات كما هي.
+احسب اليوم وغدًا وأي موعد نسبي من request_date_riyadh، تاريخ إرسال الطلب، حتى لو تأخر التنفيذ إلى يوم آخر.
 اكتب النتيجة المفيدة مباشرة؛ لا تطلب من العضو فتح صفحة إعدادات أو اعتماد اقتراح روتيني.
 لا تقل تم الحفظ قبل تنفيذ الأداة؛ سيعرض النظام نتيجة التنفيذ الفعلية بجانب جوابك.
 إذا لم تدعم الأداة المطلوب، وضّح ما تستطيع إنجازه ولا تدّع تنفيذ شيء خارجي.
@@ -243,6 +244,11 @@ class AssistantDesk:
                 return store._original_bytes(record)
 
         data, refs, warnings = build_context(ScopedFiles(), None, state, project_id, [f["id"] for f in selected], question)
+        # The queue may resume after midnight. Relative dates belong to the
+        # user's original request, not to the worker's eventual retry date.
+        data["processing_date_riyadh"] = data["date_riyadh"]
+        data["request_date_riyadh"] = job["day"]
+        data["date_riyadh"] = job["day"]
         kept, per_file = [], {}
         for source in data["sources"]:
             count = per_file.get(source["file_id"], 0)
@@ -278,22 +284,24 @@ class AssistantDesk:
         with self.store.engine.connect() as conn:
             return self._live(conn, ident, lease)[3]
 
-    def hold(self, ident, lease, code, message):
+    def hold(self, ident, lease, code, message, *, diagnostics=None):
         with self.store.transaction() as conn:
             job, details = self._job(conn, ident)
             if job["status"] != "pending" or details.get("lease") != lease: return False
-            details.update(error=message[:1000], error_code=code, lease="")
+            details.update(error=message[:1000], error_code=code, lease="", limit_kind="", gateway_request_id="", failed_model="")
+            details.update(diagnostics or {})
             conn.execute(update(runs).where(runs.c.id == ident).values(status="waiting", guards=dumps(details)))
             state, revision = self.store._state(conn)
             self._task(state, details, "waiting", "")
             self.store._save(conn, state, revision)
             return True
 
-    def defer(self, ident, lease, seconds, message):
+    def defer(self, ident, lease, seconds, message, *, diagnostics=None):
         with self.store.transaction() as conn:
             job, details = self._job(conn, ident)
             if job["status"] != "pending" or details.get("lease") != lease: return False
             details.update(error=message[:1000], error_code="provider_limit", lease="")
+            details.update(diagnostics or {})
             conn.execute(update(runs).where(runs.c.id == ident).values(status="deferred", started=time.time()+seconds, guards=dumps(details)))
             state, revision = self.store._state(conn)
             self._task(state, details, "deferred", "")
@@ -353,7 +361,7 @@ class AssistantDesk:
                     state["stakeholders"].append(values | common | {"id": target, "projectId": project_id, "version": 1})
                 elif kind == "handover_update":
                     state["handover"].update(values | {"updated_at": now_iso(), "updated_by": assistant["member_id"], "version": action["version"]+1, "aiRunId": ident})
-            details.update(lease="", error="", result_files=result_files, finished_at=now_iso(), action_count=len(actions))
+            details.update(lease="", error="", error_code="", limit_kind="", gateway_request_id="", failed_model="", result_files=result_files, finished_at=now_iso(), action_count=len(actions))
             self._task(state, details, "complete", assistant["member_id"])
             self.store._save(conn, state, revision)
             conn.execute(update(runs).where(runs.c.id == ident).values(status="complete", model=model, proposal=dumps(actions),
@@ -430,10 +438,12 @@ class DeskWorker:
             except AICreditsRequired:
                 self.desk.hold(ident, lease, "credits", "طلبك محفوظ ومسند للمساعد. تشغيل النموذج ينتظر تفعيل رصيد الذكاء الاصطناعي من إدارة المنصة.")
             except AIGatewayLimit as exc:
+                diagnostics = {"limit_kind": exc.kind, "gateway_request_id": exc.request_id,
+                               "failed_model": self.config.model if self.config else ""}
                 if exc.retry_after:
                     self.not_before = time.time()+exc.retry_after
-                    self.desk.defer(ident, lease, exc.retry_after, str(exc))
-                else: self.desk.hold(ident, lease, "provider_limit", str(exc))
+                    self.desk.defer(ident, lease, exc.retry_after, str(exc), diagnostics=diagnostics)
+                else: self.desk.hold(ident, lease, "provider_limit", str(exc), diagnostics=diagnostics)
             except WorkspaceError as exc:
                 self.desk.hold(ident, lease, "retry", str(exc))
             except Exception:

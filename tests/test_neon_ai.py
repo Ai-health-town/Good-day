@@ -259,6 +259,35 @@ def test_gateway_distinguishes_empty_credits_from_invalid_credentials():
     assert "test-secret" not in str(error.value)
 
 
+@pytest.mark.parametrize("body", [
+    {"error_code": "REQUEST_LIMIT_EXCEEDED", "message": "AI Gateway credit balance is below the required minimum."},
+    {"unavailable_reason": "credits_required", "message": "Unavailable"},
+])
+def test_low_balance_is_not_misreported_as_a_temporary_rate_limit(body):
+    from ai_service import AICreditsRequired
+    transport = httpx.MockTransport(lambda _: httpx.Response(429, json=body))
+    with pytest.raises(AICreditsRequired):
+        NeonAI(AIConfig("https://test.neon.tech", "secret", "test"), transport).check_inference()
+
+
+def test_disabled_catalog_models_are_not_offered_as_available():
+    body = {"data": [{"id": "locked", "enabled": False}, {"id": "available", "enabled": True}, {"id": "legacy"}]}
+    transport = httpx.MockTransport(lambda _: httpx.Response(200, json=body))
+    client = NeonAI(AIConfig("https://test.neon.tech", "secret", "test"), transport)
+    assert client.models() == ["available", "legacy"]
+
+
+def test_retry_after_accepts_http_dates_and_rejects_invalid_dates():
+    from datetime import datetime, timedelta, timezone
+    from email.utils import format_datetime
+    from ai_service import _retry_seconds
+    future = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120), usegmt=True)
+    assert 118 <= _retry_seconds(future) <= 120
+    assert _retry_seconds("not-a-date") is None
+    assert _retry_seconds(None) is None
+    assert _retry_seconds("999999") == 86400
+
+
 def test_inference_check_requires_an_actual_bounded_reply_without_team_data():
     captured = []
     def handle(request):

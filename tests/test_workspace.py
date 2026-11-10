@@ -40,7 +40,7 @@ def test_login_required_and_wrong_password(workspace):
     assert store.login("owner", "wrong") is None
 
 
-@pytest.mark.parametrize("role", ["manager", "member", "viewer", "agent"])
+@pytest.mark.parametrize("role", ["manager", "member", "file_manager", "viewer", "agent"])
 def test_activity_records_are_restricted_to_workspace_admin(workspace, role):
     store, owner = workspace
     _, token = make_user(store, owner, role, edit=role == "agent")

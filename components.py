@@ -81,7 +81,7 @@ def task_delete_control(store, token, actor, task, *, key, slot=st):
 
 
 def file_delete_control(store, token, actor, record, *, slot=st):
-    if actor["role"] not in ("admin", "manager"):
+    if not store.can_delete_files(actor):
         return
     suffix = record["id"] + "_" + str(record.get("version", 1))
     with slot.popover("حذف الملف", icon=":material/delete:", width="stretch", key="delete_file_" + suffix):
@@ -355,7 +355,7 @@ def edit_file(store, token, state, actor, original):
     from preview_ui import original_preview
     record = copy.deepcopy(original)
     editable = store.can_edit(actor)
-    if actor["role"] in ("admin", "manager"):
+    if store.can_delete_files(actor):
         heading, actions = st.columns([4.5, 1.5], vertical_alignment="center")
         heading.subheader(record["title"])
         file_delete_control(store, token, actor, record, slot=actions)
@@ -492,7 +492,7 @@ def chat_page(store, token, project_id="", initial_context=None):
                             "assigneeId": actor["member_id"], "status": "todo", "priority": "medium", "dueDate": today_iso(),
                             "estimatedMinutes": 30, "notes": "من رسالة الفريق: " + message["text"], "subtasks": [], "comments": [], "attachedFileId": message.get("fileId", "")}
                     perform(lambda: store.put(token, "tasks", task), "تحولت الرسالة إلى مهمة")
-                can_delete = actor["role"] in ("admin", "manager") or actor["role"] == "member" and message.get("authorId") == actor["member_id"]
+                can_delete = actor["role"] in ("admin", "manager") or actor["role"] in ("member", "file_manager") and message.get("authorId") == actor["member_id"]
                 if can_delete:
                     with buttons[1].popover("حذف"):
                         st.write("حذف هذه الرسالة؟")

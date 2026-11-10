@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from ai_service import AIConfig, NeonAI, DAILY_SPEND_MESSAGE
 from ai_store import threads
-from assistant_desk import ACTIVE, AssistantDesk, DeskWorker
+from assistant_desk import ACTIVE, MAX_SELECTED_FILES, AssistantDesk, DeskWorker
 from components import download_data, edit_file, edit_task, lookup
 from filetools import docx_bytes
 from workspace import WorkspaceError, uid, ZONE
@@ -26,6 +26,8 @@ def resources(identity, _store, _config):
 def _render_request(desk, worker, store, token, job):
     details, ident = job["details"], job["id"]
     st.text(details["question"])
+    if details.get("selected_files"):
+        st.caption("الملفات المختارة: " + " · ".join(f["title"] for f in details["selected_files"]))
     if job["status"] in ACTIVE:
         label = "وصل طلبك إلى gday.assistant" if job["status"] == "queued" else "المساعد يقرأ المطلوب وينفّذه…"
         st.info(label + " يمكنك التنقل؛ النتيجة تبقى محفوظة هنا.")
@@ -69,6 +71,8 @@ def _render_request(desk, worker, store, token, job):
 
 def help_center(store, token, state, actor, setting):
     if st.session_state.pop("desk_clear_input", False): st.session_state["desk_question"] = ""
+    clear_files = st.session_state.pop("desk_clear_files", None)
+    if clear_files: st.session_state.pop(clear_files, None)
     st.markdown("""<style>
 .st-key-assistant_desk_intro{background:linear-gradient(115deg,#f3f0f8,#edf8f4);border:1px solid #dfeae5;border-radius:18px;padding:22px 26px;margin-bottom:14px;}
 .st-key-assistant_desk_intro h3{font-size:1.65rem!important;color:#21443f;}
@@ -100,21 +104,37 @@ def help_center(store, token, state, actor, setting):
         for col, label, prompt in zip(examples, ["✳ ملخص المشروع", "◷ ترتيب المتابعة", "▤ تلخيص الملفات"], [
             "لخص وضع المشروع وأهم ما يحتاج متابعتي اليوم دون تعديل أي بيانات.",
             "رتب أولويات المهام الحالية، واقترح علي الخطوة التالية دون تعديلها.",
-            "لخص الملفات المرتبطة بالمشروع مع أهم الاستنتاجات ومصادرها، دون تعديل البيانات."]):
+            "لخص الملفات التي اخترتها مع أهم الاستنتاجات ومصادرها، دون تعديل البيانات."]):
             if col.button(label, key="desk_example_" + label, width="stretch"):
                 st.session_state["desk_question"] = prompt
+                st.session_state["desk_file_mode"] = label == "▤ تلخيص الملفات"
+        file_mode = st.session_state.get("desk_file_mode", False)
+        library_files = {f["id"]: f["title"] for f in state["files"] if f.get("projectId") == project_id}
+        selection_key = "desk_source_files_" + actor["id"] + "_" + project_id
+        if file_mode and selection_key in st.session_state:
+            st.session_state[selection_key] = [ident for ident in st.session_state[selection_key] if ident in library_files]
         with st.form("assistant_request", clear_on_submit=False):
+            file_ids = None
+            if file_mode:
+                if library_files:
+                    file_ids = st.multiselect("الملفات المطلوب تلخيصها", list(library_files), format_func=library_files.get,
+                        key=selection_key, max_selections=MAX_SELECTED_FILES, placeholder="ابحث باسم الملف واختره…")
+                    st.caption("اختر حتى خمسة ملفات من مكتبة المشروع. يُلخّص المساعد الملفات المحددة فقط.")
+                else:
+                    st.info("لا توجد ملفات في هذا المشروع بعد. أضفها من صفحة الملفات ثم اخترها هنا.")
             question = st.text_area("وش تحتاج من المساعد؟", key="desk_question", height=115, max_chars=4000,
                 placeholder="مثال: جهز لي ملخصًا تنفيذيًا من ملفات المشروع، أو أضف مهمة متابعة لخالد…")
-            submit = st.form_submit_button("إرسال إلى المساعد ←", type="primary", width="stretch")
-        st.caption("طلبك يُحفظ كمهمة في المشروع مسندة للمساعد. يقرأ سياق المشروع ومقتطفات الملفات ذات الصلة، وتظهر النتيجة لحسابك هنا.")
+            submit = st.form_submit_button("إرسال إلى المساعد ←", type="primary", width="stretch", disabled=file_mode and not library_files)
+        st.caption("يقرأ المساعد مقتطفات من الملفات المختارة، ويحفظ النتيجة هنا مع طلبك." if file_mode else
+            "طلبك يُحفظ كمهمة في المشروع مسندة للمساعد. يقرأ سياق المشروع ومقتطفات الملفات ذات الصلة، وتظهر النتيجة لحسابك هنا.")
         if submit:
             request_id = st.session_state.setdefault("desk_request_id", uid("desk_"))
-            try: desk.submit(token, project_id, question, request_id)
+            try: desk.submit(token, project_id, question, request_id, file_ids=file_ids)
             except WorkspaceError as exc: st.error(str(exc))
             else:
                 st.session_state.pop("desk_request_id", None)
                 st.session_state["desk_clear_input"] = True
+                if file_mode: st.session_state["desk_clear_files"] = selection_key
                 st.session_state["desk_selected_result"] = request_id
                 worker.kick()
                 st.rerun()

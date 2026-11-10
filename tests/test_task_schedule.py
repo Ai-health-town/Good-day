@@ -233,3 +233,23 @@ def test_client_requires_a_gesture_and_rings_once_then_cancels_on_completion(tmp
     result = subprocess.run([node, str(harness)], input=json.dumps({"script": script}), text=True, capture_output=True, timeout=15)
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout)["checks"] == "passed"
+
+
+def test_reminder_toolbar_has_one_accessible_button_without_permanent_notes():
+    from task_reminders import REMINDERS
+    class Controls(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.buttons=[]
+        def handle_starttag(self, tag, attrs):
+            if tag == "button": self.buttons.append(dict(attrs))
+    markup = REMINDERS.partition("<script>")[0]
+    parser=Controls(); parser.feed(markup)
+    assert len([b for b in parser.buttons if "data-sound" in b]) == 1
+    assert not any("data-test" in b for b in parser.buttons)
+    sound=next(b for b in parser.buttons if "data-sound" in b)
+    assert sound["aria-label"] == "تفعيل التنبيهات الصوتية"
+    assert sound["aria-pressed"] == "false"
+    assert "اترك المنصة مفتوحة" not in markup
+    assert "خلال الأيام السبعة" not in markup
+    assert "data-feedback" in markup and 'aria-live="polite"' in markup

@@ -22,7 +22,7 @@ def test_directory_upload_preserves_tree_originals_and_same_names_in_different_f
     records, ignored = prepare_uploads([
         ("مشروع/صباح/تقرير.txt", "بيانات صباحية".encode()),
         ("مشروع/مساء/تقرير.txt", "بيانات مسائية".encode()),
-        ("مشروع/مرفق.png", b"synthetic-original-image-bytes"),
+        ("مشروع/مرفق.bin", b"synthetic-original-attachment-bytes"),
         ("مشروع/.DS_Store", b"operating-system-metadata"),
     ], "p_general", directory=True)
     assert ignored == 1
@@ -32,10 +32,10 @@ def test_directory_upload_preserves_tree_originals_and_same_names_in_different_f
     validate_filing(state)
     paths = folder_labels(state["folders"])
     assert {paths[f["folderId"]] for f in state["files"]} == {"متابعة / مشروع / صباح", "متابعة / مشروع / مساء", "متابعة / مشروع"}
-    assert sorted(f["title"] for f in state["files"]) == ["تقرير.txt", "تقرير.txt", "مرفق.png"]
+    assert sorted(f["title"] for f in state["files"]) == ["تقرير.txt", "تقرير.txt", "مرفق.bin"]
     assert all("uploadPath" not in f for f in state["files"])
     for record, (_, raw) in zip(state["files"], [
-        ("", "بيانات صباحية".encode()), ("", "بيانات مسائية".encode()), ("", b"synthetic-original-image-bytes")]):
+        ("", "بيانات صباحية".encode()), ("", "بيانات مسائية".encode()), ("", b"synthetic-original-attachment-bytes")]):
         assert store.file_bytes(token, record["id"]) == raw
     assert state["files"][-1]["type"] == "attachment"
     again = store.add_files(token, [r | {"id": uid("f_")} for r in records], folder_id="dir1", deduplicate=True)

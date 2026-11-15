@@ -203,7 +203,7 @@ def render_task_header(store, token, initial_state, actor):
             state, current = initial.pop()
         else:
             try:
-                state, _, current = store.context(token)
+                state, _, current = store.reminder_context(token)
             except Forbidden:
                 render_clock()
                 st.warning("انتهت جلسة التنبيهات؛ حدّث الصفحة لتسجيل الدخول.")

@@ -462,11 +462,11 @@ def file_working_copy(store,token,state,actor,original,record,editable,original_
                 record["sheets"] = sheets
                 perform(lambda: store.put(token, "files", record, original.get("version", 1)), "أُضيف العمود")
     else:
-        if record.get("type") in ("pdf", "attachment"):
+        if record.get("type") in ("pdf", "attachment", "image"):
             st.caption("الملف الأصلي محفوظ كما رُفع. المساحة التالية لكتابة ملخص أو ملاحظات مرتبطة به.")
         elif record.get("blob") or record.get("object"):
             st.caption("تحرير النص وتصديره ينشئ مستندًا مبسطًا. الملف الأصلي يحتفظ بتنسيقه ومحتواه الكامل.")
-        text = st.text_area("محتوى المستند" if record.get("type") not in ("pdf", "attachment") else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
+        text = st.text_area("محتوى المستند" if record.get("type") not in ("pdf", "attachment", "image") else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
         record["text"] = text
         record.pop("content", None)
         st.download_button("تنزيل المحتوى — Word", download_data(store, token, lambda: docx_bytes(Path(title).stem, text)), Path(title).stem + "_edited.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")

@@ -18,6 +18,7 @@ from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSE
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
 from contacttools import task_contact_names
 from foldertools import folder_labels, prepare_uploads
+from image_tools import file_kind
 from migration import build_merge
 from components import (flash, perform, lookup, record_picker, enum_picker, end_session, download_data,
                         end_day, account_settings, edit_task, task_time_input, task_delete_control, edit_directory, edit_file,
@@ -420,9 +421,9 @@ def files_page(store, token, state, actor):
     if c.button("↑ رفع ملفات", type="primary", disabled=not store.can_edit(actor), width="stretch"):
         upload_dialog(store, token, state, current)
     st.caption("المستندات، الجداول والمعرفة التي ترافق العمل. الأصول محفوظة وقابلة للتنزيل.")
-    cols = st.columns(4)
-    for col, kind, label in zip(cols, ["doc", "sheet", "pdf", "attachment"], ["مستندات", "جداول", "ملفات PDF", "مرفقات"]):
-        col.metric(label, sum(f.get("type") == kind for f in state["files"]))
+    cols = st.columns(5)
+    for col, kind, label in zip(cols, ["doc", "sheet", "pdf", "image", "attachment"], ["مستندات", "جداول", "ملفات PDF", "صور", "مرفقات"]):
+        col.metric(label, sum(file_kind(f) == kind for f in state["files"]))
     current = st.selectbox("المجلد", options, key="library_folder",
                            format_func=lambda ident: labels.get(ident, "كل الملفات" if ident == "*" else "المكتبة الرئيسية"))
     selected_folder = next((f for f in folders if f["id"] == current), None)
@@ -443,11 +444,11 @@ def files_page(store, token, state, actor):
                 st.caption(f"{count} ملف" + (" · " + lookup(state["projects"], folder.get("projectId")) if len(state["projects"]) > 1 else ""))
     search, kind, favorite = st.columns([2, 1, 1])
     query = search.text_input("بحث في الملفات", placeholder="عنوان الملف…")
-    selected_type = kind.selectbox("نوع الملفات", ["الكل", "مستندات", "جداول", "PDF", "مرفقات"])
+    selected_type = kind.selectbox("نوع الملفات", ["الكل", "مستندات", "جداول", "PDF", "صور", "مرفقات"])
     starred = favorite.checkbox("المميزة فقط")
-    wanted = {"مستندات": "doc", "جداول": "sheet", "PDF": "pdf", "مرفقات": "attachment"}.get(selected_type)
+    wanted = {"مستندات": "doc", "جداول": "sheet", "PDF": "pdf", "صور": "image", "مرفقات": "attachment"}.get(selected_type)
     records = sorted([f for f in state["files"] if (current == "*" or f.get("folderId", "") == current)
-                      and (not query or query.casefold() in f["title"].casefold()) and (not wanted or f.get("type") == wanted)
+                      and (not query or query.casefold() in f["title"].casefold()) and (not wanted or file_kind(f) == wanted)
                       and (not starred or f.get("starred"))], key=lambda f: str(f.get("updatedAt", "")), reverse=True)
     if not records:
         empty("المعرفة تبدأ بملف", "ارفع مستندًا أو جدولًا، أو أنشئ ملفًا جديدًا هنا.")
@@ -459,7 +460,7 @@ def files_page(store, token, state, actor):
     grid = st.columns(2)
     for index, record in enumerate(records):
         with grid[index % 2], st.container(border=True):
-            tag = {"doc": "DOC", "sheet": "XLS", "pdf": "PDF"}.get(record.get("type"), "FILE")
+            tag = {"doc": "DOC", "sheet": "XLS", "pdf": "PDF", "image": "IMG"}.get(file_kind(record), "FILE")
             st.markdown(f'<div class="file-icon">{tag}</div>', unsafe_allow_html=True)
             st.markdown("**" + ("⭐ " if record.get("starred") else "") + safe(record["title"]) + "**")
             st.caption(lookup(state["projects"], record.get("projectId")) + " · " + str(record.get("updatedAt", ""))[:16].replace("T", " "))

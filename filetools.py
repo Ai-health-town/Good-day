@@ -72,7 +72,10 @@ def parse_upload(filename, raw, project_id, *, allow_attachment=False):
               "comments": [], "blob": base64.b64encode(raw).decode(), "originalName": Path(filename).name,
               "size": len(raw), "updatedAt": now_iso(), "legacy": False}
     try:
-        if suffix in (".xlsx", ".xlsm"):
+        from image_tools import IMAGE_SUFFIXES, image_info
+        if suffix in IMAGE_SUFFIXES:
+            record.update(type="image", text="", imageInfo=image_info(raw))
+        elif suffix in (".xlsx", ".xlsm"):
             check_archive(raw)
             book = load_workbook(io.BytesIO(raw), read_only=True, data_only=False, keep_links=False)
             try:

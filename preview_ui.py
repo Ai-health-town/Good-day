@@ -12,6 +12,13 @@ from filetools import file_sheets, file_text
 from office_preview import OFFICE_TYPES, render_office
 from sheet_preview import open_excel, sheet_html
 from workspace import WorkspaceError
+from image_tools import file_kind, prepare_image
+
+
+@st.cache_data(show_spinner=False, max_entries=3, ttl=1800)
+def prepared_image(raw, engine_generation):
+    # Original bytes come from Store.file_bytes after live authorization.
+    return prepare_image(raw)
 
 
 @st.cache_data(show_spinner=False, max_entries=3, ttl=1800)
@@ -46,7 +53,7 @@ def cached_excel_page(source, calculated, selected, first, formulas, engine_gene
     return _excel_snapshot(source, calculated, selected, first, formulas)[2]
 
 
-def excel_view(record, source, calculated=None):
+def excel_view(record, source, calculated=None, *, calculate_missing=False):
     try:
         generation = (id(open_excel), id(sheet_html), id(_excel_snapshot))
         sheets, first_sheet, first_view = prepared_excel(source, calculated, generation)
@@ -62,6 +69,17 @@ def excel_view(record, source, calculated=None):
         formulas = b.checkbox("إظهار الصيغ بدل النتائج", key="preview_formulas_" + record["id"])
         first = (page-1)*100+1
         html, formula_rows, missing = first_view if selected == first_sheet and first == 1 and not formulas else cached_excel_page(source, calculated, selected, first, formulas, generation)
+        if missing and calculate_missing and not calculated:
+            # Most saved Excel files already contain formula results. Starting
+            # Office/PDF conversion for those files adds no value to the grid.
+            # Keep automatic calculation for cells whose saved result is absent.
+            try:
+                with st.spinner("يحسب نتائج الصيغ غير المحفوظة…"):
+                    preview = converted_original(source, Path(record.get("originalName", "")).suffix.lower(), id(render_office))
+                if preview and preview.workbook:
+                    html, formula_rows, missing = cached_excel_page(source, preview.workbook, selected, first, formulas, generation)
+            except WorkspaceError as exc:
+                st.warning(str(exc))
         st.caption(f"الصفوف {first}–{min(row_count,first+99)} من {row_count} · {column_count} أعمدة. للتنسيق المشروط والرسوم وتوزيع الصفحات اختر «تخطيط الطباعة».")
         html_component.html(html,height=635,scrolling=False)
         if missing:
@@ -75,6 +93,15 @@ def excel_view(record, source, calculated=None):
 
 def original_preview(record, raw, working_copy=True):
     suffix = Path(record.get("originalName") or record["title"]).suffix.lower()
+    if file_kind(record) == "image":
+        try:
+            preview = prepared_image(raw, id(prepare_image))
+            st.image(preview.data, caption=record["title"], width="stretch")
+            st.caption(f"{preview.format} · {preview.width} × {preview.height} بكسل" +
+                       (" · معاينة الإطار الأول" if preview.format in ("GIF", "TIFF") else ""))
+        except WorkspaceError as exc:
+            st.warning(str(exc))
+        return
     if record.get("type") == "attachment":
         st.info("الملف الأصلي محفوظ. استخدم «تنزيل الملف الأصلي» لفتحه بالتطبيق المناسب.")
         return
@@ -84,6 +111,13 @@ def original_preview(record, raw, working_copy=True):
         st.pdf(raw,height=650,key="original_pdf_" + record["id"])
         return
     if suffix in OFFICE_TYPES:
+        view = None
+        if record.get("type") == "sheet":
+            view = st.radio("عرض Excel",["أوراق Excel","تخطيط الطباعة"],horizontal=True,
+                            key="excel_view_" + record["id"])
+            if view == "أوراق Excel" and suffix in (".xlsx", ".xlsm"):
+                excel_view(record, raw, calculate_missing=True)
+                return
         preview = None
         try:
             with st.spinner("يجهّز صفحات الملف وتنسيقه…"):
@@ -91,8 +125,6 @@ def original_preview(record, raw, working_copy=True):
         except WorkspaceError as exc:
             st.warning(str(exc))
         if record.get("type") == "sheet":
-            view = st.radio("عرض Excel",["أوراق Excel","تخطيط الطباعة"],horizontal=True,
-                            key="excel_view_" + record["id"])
             if view == "أوراق Excel":
                 source = preview.workbook if suffix == ".xls" and preview else raw
                 if source and (suffix != ".xls" or preview and preview.workbook):

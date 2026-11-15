@@ -180,7 +180,7 @@ def prepare_import(raw):
                     validate_object(record["object"])
                 if not isinstance(record.get("title"), str):
                     raise WorkspaceError("اسم ملف غير صالح.")
-                if record.get("type") not in ("doc", "sheet", "pdf", "attachment"):
+                if record.get("type") not in ("doc", "sheet", "pdf", "attachment", "image"):
                     raise WorkspaceError("نوع ملف غير معروف.")
                 if "sheets" in record:
                     sheets = record["sheets"]
@@ -350,7 +350,8 @@ class Store:
             self._cached_revision = None
             self._cached_state = None
 
-    def context(self, token):
+    def _context_snapshot(self, token):
+        """Private read-only snapshot; every call checks the live account/session."""
         # Keep a local reference to an immutable snapshot. Other readers can
         # refresh/invalidate the shared cache while this query is in flight.
         with self._cache_lock:
@@ -372,7 +373,16 @@ class Store:
                 if self._cached_revision is None or revision >= self._cached_revision:
                     self._cached_state, self._cached_revision = state, revision
         actor = {column.name: row[column.name] for column in users.c if column.name != "password_hash"}
+        return state, revision, actor
+
+    def context(self, token):
+        state, revision, actor = self._context_snapshot(token)
         return copy.deepcopy(state), revision, actor
+
+    def reminder_context(self, token):
+        state, revision, actor = self._context_snapshot(token)
+        # Reminder refreshes need tasks, never spreadsheet grids or file blobs.
+        return {"tasks": copy.deepcopy(state["tasks"])}, revision, actor
 
     def _log(self, conn, actor, action, detail=""):
         conn.execute(insert(audit).values(id=uid(), at=now_iso(), actor=actor["name"], action=action, detail=detail[:1000]))
@@ -802,7 +812,7 @@ class Store:
 
     def file_bytes(self, token, file_id):
         """Only a live, authenticated workspace record can name a downloadable object."""
-        state, _ = self.read(token)
+        state, _, _ = self._context_snapshot(token)
         record = next((f for f in state["files"] if f["id"] == file_id), None)
         if record is None:
             raise WorkspaceError("الملف غير موجود.")

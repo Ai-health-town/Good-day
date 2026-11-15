@@ -265,6 +265,7 @@ else:
     element(app.radio, "طريقة الرفع").set_value("مجلد كامل").run()
     healthy(app)
     assert app.get("file_uploader")[0].proto.accept_directory
+    assert app.get("file_uploader")[0].proto.max_upload_size_mb == 8
     assert element(app.selectbox, "المجلد").value == folder["id"]
 
 

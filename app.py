@@ -159,6 +159,7 @@ def upload_dialog(store, token, state, folder_id=""):
     with st.form("upload_batch_" + str(generation)):
         uploaded = st.file_uploader("اختر المجلد من جهازك" if directory else "المستندات والجداول والمرفقات",
                                     accept_multiple_files="directory" if directory else True,
+                                    max_upload_size=8,
                                     key="uploads_" + str(generation) + ("_directory" if directory else "_files"))
         st.caption("حتى 200 ملف في الدفعة، و8 ميجابايت للملف. تُحفظ الأصول والمجلدات الفرعية؛ تتوفر معاينة للصيغ المدعومة وبقية المرفقات للتنزيل.")
         submit = st.form_submit_button("حفظ الملفات في المكتبة", type="primary", width="stretch")

@@ -34,7 +34,7 @@ def build_merge(raw, state, project_id):
     incoming = prepare_import(raw)["data"]
     if project_id not in {p["id"] for p in state["projects"]}:
         raise WorkspaceError("اختر مشروعًا موجودًا لاستقبال المحتوى.")
-    additions = {"tasks": [], "files": [], "stakeholders": []}
+    additions = {"tasks": [], "files": [], "stakeholders": [], "folders": []}
     summary = {"tasks_added": 0, "tasks_skipped": 0, "files_added": 0, "files_skipped": 0,
                "contacts_added": 0, "contacts_skipped": 0, "unassigned": 0, "messages_archived": 0}
     source_members = {m["id"]: m["name"] for m in incoming["members"]}
@@ -49,6 +49,29 @@ def build_merge(raw, state, project_id):
         matches = [p for p in state["projects"] if p["id"] == project["id"] or label(p["name"]) == label(project["name"])]
         project_map[project["id"]] = matches[0]["id"] if len(matches) == 1 else project_id
     source_projects = {p["id"]: p["name"] for p in incoming["projects"]}
+    folder_map = {}
+    source_folders = {f["id"]: f for f in incoming.get("folders", [])}
+    folder_index = {(f.get("projectId"), f.get("parentId", ""), f["name"].casefold()): f["id"]
+                    for f in state.get("folders", [])}
+
+    def merge_folder(ident):
+        if not ident:
+            return ""
+        if ident in folder_map:
+            return folder_map[ident]
+        source = source_folders[ident]
+        project = project_map.get(source.get("projectId"), project_id)
+        parent = merge_folder(source.get("parentId", ""))
+        signature = project, parent, source["name"].casefold()
+        if signature not in folder_index:
+            record = copy.deepcopy(source) | {"id": uid("dir_"), "projectId": project, "parentId": parent}
+            additions["folders"].append(record)
+            folder_index[signature] = record["id"]
+        folder_map[ident] = folder_index[signature]
+        return folder_map[ident]
+
+    for ident in source_folders:
+        merge_folder(ident)
     contacts = {(label(c["name"]), label(c.get("org"))): c["id"] for c in state["stakeholders"]}
     contact_map = {}
     for source in incoming["stakeholders"]:
@@ -62,15 +85,21 @@ def build_merge(raw, state, project_id):
             contacts[signature] = record["id"]
             contact_map[source["id"]] = record["id"]
             summary["contacts_added"] += 1
-    hashes = {file_fingerprint(f): f["id"] for f in state["files"]}
+    def filing_hash(record):
+        digest = file_fingerprint(record)
+        return (record.get("projectId"), record["folderId"], record["title"].casefold(), digest) if record.get("folderId") else digest
+
+    hashes = {filing_hash(f): f["id"] for f in state["files"]}
     file_map = {}
     for source in incoming["files"]:
-        fingerprint = file_fingerprint(source)
+        filed_source = source | {"projectId": project_map.get(source.get("projectId"), project_id),
+                                 "folderId": folder_map.get(source.get("folderId"), "")}
+        fingerprint = filing_hash(filed_source)
         if fingerprint in hashes:
             file_map[source["id"]] = hashes[fingerprint]
             summary["files_skipped"] += 1
             continue
-        record = copy.deepcopy(source) | {"id": uid("f_"), "source_id": source["id"], "projectId": project_map.get(source.get("projectId"), project_id)}
+        record = copy.deepcopy(filed_source) | {"id": uid("f_"), "source_id": source["id"]}
         if record.get("content") and not record.get("blob"):
             record.update(blob=base64.b64encode(record["content"].encode()).decode(), originalName=record["title"].rsplit(".", 1)[0] + ".html")
         record["text"] = file_text(record)

@@ -8,6 +8,7 @@ import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
 from contacttools import phone_parts, phone_html, matches_contact, task_contact_ids
+from foldertools import folder_labels
 from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
 COOKIE = "gday_session_v2"
@@ -55,6 +56,33 @@ def record_picker(label, records, value="", empty=True, key=None):
 def enum_picker(label, choices, value=None, key=None):
     options = list(choices)
     return st.selectbox(label, options, index=options.index(value) if value in options else 0, format_func=choices.get, key=key)
+
+
+def library_folder_picker(state, project_id, value="", *, label="المجلد", key=None, disabled=False):
+    folders = [f for f in state.get("folders", []) if f.get("projectId") == project_id]
+    labels = folder_labels(folders)
+    choices = [""] + sorted(labels, key=lambda ident: labels[ident].casefold())
+    return st.selectbox(label, choices, index=choices.index(value) if value in choices else 0,
+                        format_func=lambda ident: labels.get(ident, "المكتبة الرئيسية"), key=key, disabled=disabled)
+
+
+def paged_records(records, *, key, signature, page_size=12):
+    """Bound widget/DOM work while keeping every result reachable and filters local."""
+    page_key, signature_key = key + "_page", key + "_filter"
+    pages = max(1, (len(records) + page_size - 1) // page_size)
+    if st.session_state.get(signature_key) != signature:
+        st.session_state[signature_key] = signature
+        st.session_state[page_key] = 1
+    if not 1 <= st.session_state.get(page_key, 1) <= pages:
+        st.session_state[page_key] = 1
+    if pages > 1:
+        info, control = st.columns([4, 1])
+        page = control.number_input("الصفحة", min_value=1, max_value=pages, step=1, key=page_key)
+        start = (page - 1) * page_size
+        info.caption(f"{start + 1}–{min(start + page_size, len(records))} من {len(records)} · الصفحة {page} من {pages}")
+        return records[start:start + page_size]
+    st.caption(f"{len(records)} نتيجة")
+    return records
 
 
 def task_time_input(label, value="", *, key, disabled=False):
@@ -326,6 +354,8 @@ def directory_page(store, token, state, actor, collection):
     records = [r for r in state[collection] if matches_contact(r,search)]
     if not records:
         st.info("لا توجد سجلات في هذا العرض.")
+    records = paged_records(records, key="directory_" + collection,
+                           signature=(search, tuple(p["id"] for p in state["projects"])))
     columns = st.columns(2)
     for index, record in enumerate(records):
         with columns[index % 2], st.container(border=True, key="directory_card_" + collection + "_" + record["id"]):
@@ -396,8 +426,10 @@ def edit_file(store, token, state, actor, original):
 def file_working_copy(store,token,state,actor,original,record,editable,original_bytes):
     title = st.text_input("اسم الملف", record["title"], disabled=not editable)
     project = record_picker("مشروع الملف", state["projects"], record.get("projectId"), empty=False)
+    folder = library_folder_picker(state, project, record.get("folderId", ""), disabled=not editable,
+                                   key="file_folder_" + record["id"] + "_" + project + "_" + str(record.get("version", 1)))
     star = st.checkbox("تمييز الملف", value=bool(record.get("starred")), disabled=not editable)
-    record.update(title=title, projectId=project, starred=star)
+    record.update(title=title, projectId=project, folderId=folder, starred=star)
     if record.get("type") == "sheet":
         sheets = copy.deepcopy(file_sheets(record))
         selected = st.selectbox("ورقة العمل", range(len(sheets)), format_func=lambda i: sheets[i]["name"])
@@ -430,11 +462,11 @@ def file_working_copy(store,token,state,actor,original,record,editable,original_
                 record["sheets"] = sheets
                 perform(lambda: store.put(token, "files", record, original.get("version", 1)), "أُضيف العمود")
     else:
-        if record.get("type") == "pdf":
-            st.caption("ملف PDF الأصلي محفوظ كما رُفع. المساحة التالية لكتابة ملخص أو ملاحظات مرتبطة به.")
+        if record.get("type") in ("pdf", "attachment"):
+            st.caption("الملف الأصلي محفوظ كما رُفع. المساحة التالية لكتابة ملخص أو ملاحظات مرتبطة به.")
         elif record.get("blob") or record.get("object"):
             st.caption("تحرير النص وتصديره ينشئ مستندًا مبسطًا. الملف الأصلي يحتفظ بتنسيقه ومحتواه الكامل.")
-        text = st.text_area("محتوى المستند" if record.get("type") != "pdf" else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
+        text = st.text_area("محتوى المستند" if record.get("type") not in ("pdf", "attachment") else "ملخص الملف وملاحظاته", value=file_text(record), height=330, disabled=not editable, key="file_text_" + record["id"])
         record["text"] = text
         record.pop("content", None)
         st.download_button("تنزيل المحتوى — Word", download_data(store, token, lambda: docx_bytes(Path(title).stem, text)), Path(title).stem + "_edited.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", on_click="ignore")

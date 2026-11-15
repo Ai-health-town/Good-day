@@ -20,6 +20,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from task_schedule import ScheduleError, validate_schedule, is_overdue
 from contacttools import task_contact_ids, set_task_contacts
+from foldertools import folder_name, upload_path, validate_filing, rehome_folders, upload_identity
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
                         Text, bindparam, case, create_engine, delete, event, insert, select, update)
@@ -29,7 +30,7 @@ ZONE = ZoneInfo("Asia/Riyadh")
 STATUSES = {"todo": "جديدة", "in_progress": "قيد العمل", "waiting_stakeholder": "بانتظار رد", "done": "مكتملة"}
 PRIORITIES = {"urgent": "عاجلة", "high": "مرتفعة", "medium": "عادية", "normal": "منخفضة"}
 ROLES = {"admin": "مدير النظام", "manager": "مشرف الفريق", "member": "عضو", "file_manager": "عضو مع حذف الملفات", "viewer": "مشاهد", "agent": "مساعد ذكي"}
-COLLECTIONS = ("members", "projects", "stakeholders", "tasks", "files", "messages")
+COLLECTIONS = ("members", "projects", "stakeholders", "tasks", "files", "messages", "folders")
 MAX_BACKUP = 30 * 1024 * 1024
 
 
@@ -101,7 +102,7 @@ def verify_password(password, encoded):
 
 def blank_state():
     return {"members": [], "projects": [{"id": "p_general", "name": "مساحة الفريق", "desc": "متابعة العمل والقرارات اليومية", "version": 1}],
-            "stakeholders": [], "tasks": [], "files": [], "messages": [],
+            "stakeholders": [], "tasks": [], "files": [], "messages": [], "folders": [],
             "handover": {"summary": "", "next_step": "", "decisions": "", "updated_at": "", "version": 1}}
 
 
@@ -141,7 +142,7 @@ def prepare_import(raw):
             if isinstance(item, dict) and "grid" in item:
                 item.setdefault("sheetData", item["grid"])
     result = blank_state()
-    limits = {"members": 2000, "projects": 1000, "stakeholders": 5000, "tasks": 20000, "files": 1000, "messages": 50000}
+    limits = {"members": 2000, "projects": 1000, "stakeholders": 5000, "tasks": 20000, "files": 1000, "messages": 50000, "folders": 1000}
     for name in COLLECTIONS:
         records = data.get(name, [])
         if not isinstance(records, list) or len(records) > limits[name]:
@@ -179,7 +180,7 @@ def prepare_import(raw):
                     validate_object(record["object"])
                 if not isinstance(record.get("title"), str):
                     raise WorkspaceError("اسم ملف غير صالح.")
-                if record.get("type") not in ("doc", "sheet", "pdf"):
+                if record.get("type") not in ("doc", "sheet", "pdf", "attachment"):
                     raise WorkspaceError("نوع ملف غير معروف.")
                 if "sheets" in record:
                     sheets = record["sheets"]
@@ -225,6 +226,10 @@ def prepare_import(raw):
         if not isinstance(handover.get(k, ""), str):
             raise WorkspaceError("بيانات تسليم اليوم غير صالحة.")
     result["handover"].update({k: handover.get(k, "") for k in ("summary", "next_step", "decisions", "updated_at")})
+    try:
+        validate_filing(result)
+    except ValueError as exc:
+        raise WorkspaceError(str(exc)) from None
     return {"data": result, "source": "النسخة الجديدة" if modern else "النسخة السابقة (HTML)",
             "exported_at": str(payload.get("exported_at", "غير مسجل في النسخة السابقة"))}
 
@@ -327,7 +332,9 @@ class Store:
 
     def _state(self, conn):
         row = conn.execute(select(workspaces).where(workspaces.c.id == "main")).mappings().one()
-        return json.loads(row["payload"]), row["revision"]
+        state = json.loads(row["payload"])
+        state.setdefault("folders", [])
+        return state, row["revision"]
 
     def _save(self, conn, state, revision):
         encoded = dumps(state)
@@ -358,6 +365,8 @@ class Store:
             raise Forbidden("انتهت الجلسة أو أُوقف الحساب؛ سجّل الدخول من جديد.")
         revision = row["workspace_revision"]
         state = json.loads(row["workspace_payload"]) if row["workspace_payload"] is not None else cached_state
+        if row["workspace_payload"] is not None:
+            state.setdefault("folders", [])
         if row["workspace_payload"] is not None:
             with self._cache_lock:
                 if self._cached_revision is None or revision >= self._cached_revision:
@@ -520,6 +529,18 @@ class Store:
                     raise WorkspaceError("نص الرسالة مطلوب، وبحد أقصى 20 ألف حرف.")
                 record["authorId"] = old.get("authorId") if old else actor["member_id"]
                 record["time"] = old.get("time", now_iso()) if old else now_iso()
+            if collection in ("files", "folders"):
+                try:
+                    if collection == "folders":
+                        record["name"] = folder_name(record.get("name"))
+                        if old and old.get("projectId") != record.get("projectId"):
+                            raise ValueError("لنقل المجلد بين المشاريع استخدم نقل محتوى المشروع.")
+                    candidate = state | {collection: [x for x in state[collection] if x["id"] != record["id"]] + [record]}
+                    validate_filing(candidate)
+                    if collection == "files" and len(candidate["files"]) > 1000:
+                        raise ValueError("تجاوزت المكتبة الحد الأقصى وهو 1000 ملف.")
+                except ValueError as exc:
+                    raise WorkspaceError(str(exc)) from None
             if collection == "files" and self.storage and record.get("blob"):
                 record = self.storage.externalize(record)
             record["version"] = old.get("version", 1) + 1 if old else 1
@@ -548,10 +569,12 @@ class Store:
                         (name == "stakeholders" and source_id == "p_general" and not r.get("projectId"))]
                         for name in ("tasks", "files", "stakeholders")}
             counts = {name: len(records) for name, records in selected.items()}
-            if any(counts.values()):
+            moved_folders = [f for f in state["folders"] if f.get("projectId") == source_id]
+            if any(counts.values()) or moved_folders:
                 self._snapshot(conn, state, "قبل نقل محتوى المشروع: " + projects[source_id]["name"])
+                rehome_folders(state, source_id, target_id)
                 at = now_iso()
-                for records in selected.values():
+                for records in [*selected.values(), moved_folders]:
                     for record in records:
                         record.update(projectId=target_id, version=record.get("version", 1) + 1,
                                       updatedAt=at, updatedBy=actor["member_id"])
@@ -568,7 +591,7 @@ class Store:
                 self.require(actor, "edit")
                 if actor["role"] == "agent":
                     raise Forbidden("حساب المساعد لا يحذف الدردشات.")
-            elif collection == "files":
+            elif collection in ("files", "folders"):
                 self.require(actor, "delete_files")
             else:
                 self.require(actor, "manage")
@@ -582,13 +605,17 @@ class Store:
                 raise WorkspaceError("هذا الملف مرتبط بحساب. أوقف الحساب من إدارة الأعضاء بدل حذفه.")
             if collection == "projects" and len(state["projects"]) == 1:
                 raise WorkspaceError("احتفظ بمشروع واحد على الأقل.")
+            if collection == "folders" and (any(f.get("parentId") == ident for f in state["folders"]) or
+                                               any(f.get("folderId") == ident for f in state["files"])):
+                raise WorkspaceError("انقل محتويات المجلد أولًا؛ يمكن حذف المجلد الفارغ فقط.")
             if collection == "files":
                 self._snapshot(conn, state, "قبل حذف ملف: " + str(old.get("title") or ident))
             state[collection] = [x for x in state[collection] if x["id"] != ident]
             # Never cascade-delete tasks, files, or conversations by removing a project.
             if collection == "projects":
                 fallback = state["projects"][0]["id"]
-                for name in ("tasks", "files", "messages", "stakeholders"):
+                rehome_folders(state, ident, fallback)
+                for name in ("tasks", "files", "messages", "stakeholders", "folders"):
                     for item in state[name]:
                         if item.get("projectId") == ident:
                             item.update(projectId=fallback, version=item.get("version", 1) + 1)
@@ -610,23 +637,71 @@ class Store:
             self._save(conn, state, revision)
             self._log(conn, actor, "حذف " + collection, ident)  # Deleted chat content is not retained in audit.
 
-    def add_files(self, token, records):
+    def add_files(self, token, records, *, folder_id="", deduplicate=False):
         """A whole upload batch is committed once or rolled back completely."""
+        if len(records) > 200:
+            raise WorkspaceError("ارفع حتى 200 ملف في الدفعة الواحدة.")
+        staged = copy.deepcopy(records)
+        if self.storage and staged:
+            # Network uploads must not hold the workspace write lock. Originals
+            # are immutable/content-addressed; authorize before transferring and
+            # again at commit, and retain any concurrent metadata updates.
+            self.require(self.actor(token), "edit")
+            staged = [self.storage.externalize(record) for record in staged]
         with self.transaction() as conn:
             actor = self._actor(conn, token)
             self.require(actor, "edit")
             state, revision = self._state(conn)
+            destination = next((f for f in state["folders"] if f["id"] == folder_id), None)
+            if folder_id and not destination:
+                raise WorkspaceError("المجلد المختار لم يعد موجودًا؛ حدّث الصفحة.")
             seen = {f["id"] for f in state["files"]}
-            for record in copy.deepcopy(records):
+            identities = {upload_identity(f) for f in state["files"]} if deduplicate else set()
+            added, skipped, new_folders = 0, 0, 0
+            for record in staged:
                 if record.get("id") in seen or not record.get("id") or not record.get("title"):
                     raise WorkspaceError("يوجد ملف ناقص البيانات أو مكرر.")
                 seen.add(record["id"])
-                if self.storage:
-                    record = self.storage.externalize(record)
+                project = record.get("projectId")
+                if project not in {p["id"] for p in state["projects"]}:
+                    raise WorkspaceError("اختر مشروعًا موجودًا لحفظ الملفات.")
+                if destination and destination["projectId"] != project:
+                    raise WorkspaceError("المجلد المختار يتبع مشروعًا آخر.")
+                parent = folder_id or record.get("folderId", "")
+                try:
+                    path = record.pop("uploadPath", "")
+                    parts = upload_path(path) if path else []
+                except ValueError as exc:
+                    raise WorkspaceError(str(exc)) from None
+                for name in parts:
+                    folder = next((f for f in state["folders"] if f.get("projectId") == project and
+                                   f.get("parentId", "") == parent and f["name"].casefold() == name.casefold()), None)
+                    if folder is None:
+                        folder = {"id": uid("dir_"), "name": name, "projectId": project, "parentId": parent,
+                                  "version": 1, "updatedAt": now_iso(), "updatedBy": actor["member_id"]}
+                        state["folders"].append(folder)
+                        new_folders += 1
+                    parent = folder["id"]
+                record["folderId"] = parent
+                if deduplicate:
+                    identity = upload_identity(record)
+                    if identity in identities:
+                        skipped += 1
+                        continue
+                    identities.add(identity)
                 record.update(version=1, updatedAt=now_iso(), updatedBy=actor["member_id"])
                 state["files"].append(record)
+                added += 1
                 self._log(conn, actor, "رفع ملف", record["title"])
-            self._save(conn, state, revision)
+            try:
+                validate_filing(state)
+            except ValueError as exc:
+                raise WorkspaceError(str(exc)) from None
+            if len(state["files"]) > 1000:
+                raise WorkspaceError("تجاوزت المكتبة الحد الأقصى وهو 1000 ملف.")
+            if added or new_folders:
+                self._save(conn, state, revision)
+            return {"added": added, "skipped": skipped, "folders_added": new_folders}
 
     def patch_tasks(self, token, patches):
         """Commit a table edit atomically; detect stale individual rows."""
@@ -687,6 +762,12 @@ class Store:
                             record = self.storage.externalize(record)
                         record.update(version=1, updatedAt=now_iso(), updatedBy=actor["member_id"])
                         state[collection].append(record)
+                try:
+                    validate_filing(state)
+                    if len(state["files"]) > 1000:
+                        raise ValueError("تجاوزت المكتبة الحد الأقصى وهو 1000 ملف.")
+                except ValueError as exc:
+                    raise WorkspaceError(str(exc)) from None
                 self._save(conn, state, revision)
             self._log(conn, actor, "استيراد إضافي دون استبدال", dumps(summary))
             return summary

@@ -75,6 +75,9 @@ def excel_view(record, source, calculated=None):
 
 def original_preview(record, raw, working_copy=True):
     suffix = Path(record.get("originalName") or record["title"]).suffix.lower()
+    if record.get("type") == "attachment":
+        st.info("الملف الأصلي محفوظ. استخدم «تنزيل الملف الأصلي» لفتحه بالتطبيق المناسب.")
+        return
     if working_copy:
         st.caption("هذه معاينة الأصل كما رُفع. تعديلات المحتوى محفوظة بصورة مستقلة في «نسخة العمل».")
     if record.get("type") == "pdf":

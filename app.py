@@ -17,10 +17,11 @@ import streamlit as st
 from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSES, PRIORITIES, now_iso, today_iso, morning_brief, uid
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
 from contacttools import task_contact_names
+from foldertools import folder_labels, prepare_uploads
 from migration import build_merge
 from components import (flash, perform, lookup, record_picker, enum_picker, end_session, download_data,
                         end_day, account_settings, edit_task, task_time_input, task_delete_control, edit_directory, edit_file,
-                        chat_page, members_page, activity_page, directory_page)
+                        chat_page, members_page, activity_page, directory_page, library_folder_picker, paged_records)
 from theme import inject, safe, welcome, panel, empty
 from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value, due_label, is_overdue
 
@@ -148,34 +149,55 @@ def start_day(store, token, state, revision, actor):
 
 
 @st.dialog("رفع ملفات إلى المكتبة", width="large")
-def upload_dialog(store, token, state):
+def upload_dialog(store, token, state, folder_id=""):
     generation = st.session_state.get("upload_generation", 0)
+    current = next((f for f in state.get("folders", []) if f["id"] == folder_id), {})
+    project = record_picker("المشروع", state["projects"], current.get("projectId", ""), empty=False)
+    folder = library_folder_picker(state, project, folder_id,
+                                   key="upload_folder_" + project + "_" + folder_id + "_" + str(generation))
+    directory = st.radio("طريقة الرفع", ["ملفات", "مجلد كامل"], horizontal=True) == "مجلد كامل"
     with st.form("upload_batch_" + str(generation)):
-        project = record_picker("المشروع", state["projects"], empty=False)
-        uploaded = st.file_uploader("المستندات والجداول والمرفقات", type=["docx", "xlsx", "xlsm", "xls", "csv", "tsv", "pdf", "txt", "md", "html"], accept_multiple_files=True, key="uploads_" + str(generation))
-        st.caption("حتى 8 ميجابايت للملف. يحفظ النظام الأصل كما رُفع، مع نسخة قابلة للتحرير للمستندات والجداول.")
+        uploaded = st.file_uploader("اختر المجلد من جهازك" if directory else "المستندات والجداول والمرفقات",
+                                    accept_multiple_files="directory" if directory else True,
+                                    key="uploads_" + str(generation) + ("_directory" if directory else "_files"))
+        st.caption("حتى 200 ملف في الدفعة، و8 ميجابايت للملف. تُحفظ الأصول والمجلدات الفرعية؛ تتوفر معاينة للصيغ المدعومة وبقية المرفقات للتنزيل.")
         submit = st.form_submit_button("حفظ الملفات في المكتبة", type="primary", width="stretch")
     if submit:
         if not uploaded:
             st.error("اختر ملفًا واحدًا على الأقل.")
             return
         try:
-            records = [parse_upload(f.name, f.getvalue(), project) for f in uploaded]
-            state_now, _ = store.read(token)
-            from migration import file_fingerprint
-            known = {file_fingerprint(f) for f in state_now["files"]}
-            unique = []
-            for record in records:
-                digest = file_fingerprint(record)
-                if digest not in known:
-                    unique.append(record); known.add(digest)
-            if unique:
-                store.add_files(token, unique)
+            with st.spinner("يحفظ الملفات ويرتب مجلداتها…"):
+                records, ignored = prepare_uploads(((f.name, f.getvalue()) for f in uploaded), project, directory=directory)
+                if not records:
+                    raise WorkspaceError("لم يُعثر على ملفات قابلة للإضافة في الاختيار.")
+                report = store.add_files(token, records, folder_id=folder, deduplicate=True)
         except WorkspaceError as exc:
             st.error(str(exc))
         else:
             st.session_state["upload_generation"] = generation + 1
-            flash(f"حُفظ {len(unique)} ملف. الملفات المطابقة الموجودة مسبقًا لم تتكرر.")
+            message = f"حُفظ {report['added']} ملف في {report['folders_added']} مجلد جديد."
+            if report["skipped"]:
+                message += f" تخطّينا {report['skipped']} ملفًا مطابقًا في المجلد نفسه."
+            if ignored:
+                message += f" تُرك {ignored} ملف نظام تلقائي."
+            flash(message)
+
+
+@st.dialog("مجلد جديد", width="small")
+def new_folder_dialog(store, token, state, parent_id=""):
+    parent = next((f for f in state.get("folders", []) if f["id"] == parent_id), {})
+    project = record_picker("المشروع", state["projects"], parent.get("projectId", ""), empty=False)
+    with st.form("new_library_folder"):
+        name = st.text_input("اسم المجلد", max_chars=180)
+        parent_id = library_folder_picker(state, project, parent_id, label="داخل المجلد")
+        if st.form_submit_button("إنشاء المجلد", type="primary", width="stretch"):
+            perform(lambda: store.put(token, "folders", {"id": uid("dir_"), "name": name, "projectId": project,
+                                                       "parentId": parent_id}), "أُنشئ المجلد")
+
+
+def open_library_folder(ident):
+    st.session_state["library_folder"] = ident
 
 
 @st.dialog("بحث شامل", width="large")
@@ -384,25 +406,55 @@ def tasks_page(store, token, state, actor):
 
 @st.fragment
 def files_page(store, token, state, actor):
-    a, b = st.columns([5, 1.3])
+    folders = state.get("folders", [])
+    labels = folder_labels(folders, state["projects"] if len(state["projects"]) > 1 else ())
+    options = ["", "*"] + sorted(labels, key=lambda ident: labels[ident].casefold())
+    if st.session_state.get("library_folder", "") not in options:
+        st.session_state["library_folder"] = ""
+    current = st.session_state.get("library_folder", "")
+    a, b, c = st.columns([4, 1.4, 1.4])
     a.subheader("مكتبة الفريق")
-    if b.button("↑ رفع ملفات", type="primary", disabled=not store.can_edit(actor), width="stretch"):
-        upload_dialog(store, token, state)
+    if b.button("مجلد جديد", icon=":material/create_new_folder:", disabled=not store.can_edit(actor), width="stretch"):
+        new_folder_dialog(store, token, state, current)
+    if c.button("↑ رفع ملفات", type="primary", disabled=not store.can_edit(actor), width="stretch"):
+        upload_dialog(store, token, state, current)
     st.caption("المستندات، الجداول والمعرفة التي ترافق العمل. الأصول محفوظة وقابلة للتنزيل.")
-    cols = st.columns(3)
-    for col, kind, label in zip(cols, ["doc", "sheet", "pdf"], ["مستندات", "جداول", "ملفات PDF"]):
+    cols = st.columns(4)
+    for col, kind, label in zip(cols, ["doc", "sheet", "pdf", "attachment"], ["مستندات", "جداول", "ملفات PDF", "مرفقات"]):
         col.metric(label, sum(f.get("type") == kind for f in state["files"]))
+    current = st.selectbox("المجلد", options, key="library_folder",
+                           format_func=lambda ident: labels.get(ident, "كل الملفات" if ident == "*" else "المكتبة الرئيسية"))
+    selected_folder = next((f for f in folders if f["id"] == current), None)
+    if selected_folder:
+        back, path = st.columns([1, 5])
+        back.button("رجوع", icon=":material/arrow_back:", on_click=open_library_folder,
+                    args=(selected_folder.get("parentId", ""),), width="stretch")
+        path.caption("المكتبة / " + labels[current])
+    children = sorted([f for f in folders if f.get("parentId", "") == current], key=lambda f: f["name"].casefold()) if current != "*" else []
+    if children:
+        shown = paged_records(children, key="library_folders", signature=(current, tuple(p["id"] for p in state["projects"])))
+        slots = st.columns(3)
+        for index, folder in enumerate(shown):
+            with slots[index % 3], st.container(border=True):
+                st.button(folder["name"], icon=":material/folder:", key="open_folder_" + folder["id"],
+                          on_click=open_library_folder, args=(folder["id"],), width="stretch")
+                count = sum(f.get("folderId", "") == folder["id"] for f in state["files"])
+                st.caption(f"{count} ملف" + (" · " + lookup(state["projects"], folder.get("projectId")) if len(state["projects"]) > 1 else ""))
     search, kind, favorite = st.columns([2, 1, 1])
     query = search.text_input("بحث في الملفات", placeholder="عنوان الملف…")
-    selected_type = kind.selectbox("نوع الملفات", ["الكل", "مستندات", "جداول", "PDF"])
+    selected_type = kind.selectbox("نوع الملفات", ["الكل", "مستندات", "جداول", "PDF", "مرفقات"])
     starred = favorite.checkbox("المميزة فقط")
-    wanted = {"مستندات": "doc", "جداول": "sheet", "PDF": "pdf"}.get(selected_type)
-    records = sorted([f for f in state["files"] if (not query or query.casefold() in f["title"].casefold()) and (not wanted or f.get("type") == wanted) and (not starred or f.get("starred"))], key=lambda f: str(f.get("updatedAt", "")), reverse=True)
+    wanted = {"مستندات": "doc", "جداول": "sheet", "PDF": "pdf", "مرفقات": "attachment"}.get(selected_type)
+    records = sorted([f for f in state["files"] if (current == "*" or f.get("folderId", "") == current)
+                      and (not query or query.casefold() in f["title"].casefold()) and (not wanted or f.get("type") == wanted)
+                      and (not starred or f.get("starred"))], key=lambda f: str(f.get("updatedAt", "")), reverse=True)
     if not records:
         empty("المعرفة تبدأ بملف", "ارفع مستندًا أو جدولًا، أو أنشئ ملفًا جديدًا هنا.")
         if st.button("تجربة عارض Excel"):
             from preview_ui import excel_example
             excel_example()
+    records = paged_records(records, key="library_files",
+                           signature=(current, query, selected_type, starred, tuple(p["id"] for p in state["projects"])))
     grid = st.columns(2)
     for index, record in enumerate(records):
         with grid[index % 2], st.container(border=True):
@@ -410,17 +462,31 @@ def files_page(store, token, state, actor):
             st.markdown(f'<div class="file-icon">{tag}</div>', unsafe_allow_html=True)
             st.markdown("**" + ("⭐ " if record.get("starred") else "") + safe(record["title"]) + "**")
             st.caption(lookup(state["projects"], record.get("projectId")) + " · " + str(record.get("updatedAt", ""))[:16].replace("T", " "))
+            if current == "*" and record.get("folderId"):
+                st.caption("📁 " + labels.get(record["folderId"], ""))
             if st.button("فتح الملف", key="open_file_" + record["id"], width="stretch"):
                 edit_file(store, token, state, actor, record)
     if store.can_edit(actor):
+        if selected_folder:
+            with st.expander("إدارة المجلد"):
+                with st.form("rename_folder_" + current):
+                    folder_title = st.text_input("اسم المجلد", selected_folder["name"], max_chars=180)
+                    if st.form_submit_button("حفظ اسم المجلد"):
+                        perform(lambda: store.put(token, "folders", selected_folder | {"name": folder_title},
+                                                  selected_folder.get("version", 1)), "حُفظ اسم المجلد")
+                is_empty = not any(f.get("folderId") == current for f in state["files"]) and not children
+                if store.can_delete_files(actor) and st.button("حذف المجلد الفارغ", disabled=not is_empty):
+                    perform(lambda: store.remove(token, "folders", current, selected_folder.get("version", 1)), "حُذف المجلد الفارغ")
         with st.expander("مستند أو جدول جديد"):
             with st.form("new_file", clear_on_submit=True):
                 name = st.text_input("اسم الملف الجديد")
                 kind = st.selectbox("نوع الملف الجديد", ["مستند", "جدول"])
+                project = record_picker("مشروع الملف الجديد", state["projects"], (selected_folder or {}).get("projectId", ""), empty=False)
                 if st.form_submit_button("إنشاء الملف"):
                     if not name.strip(): st.error("اكتب اسم الملف.")
                     else:
-                        record = {"id": uid("f_"), "title": name.strip(), "projectId": state["projects"][0]["id"], "comments": [], "starred": False, "legacy": False,
+                        folder_id = current if selected_folder and selected_folder["projectId"] == project else ""
+                        record = {"id": uid("f_"), "title": name.strip(), "projectId": project, "folderId": folder_id, "comments": [], "starred": False, "legacy": False,
                             "type": "doc" if kind == "مستند" else "sheet"}
                         record.update({"text": ""} if kind == "مستند" else {"sheets": [{"name": "البيانات", "rows": [["العنوان", "الحالة", "الملاحظات"], ["", "", ""]]}]})
                         perform(lambda: store.put(token, "files", record), "أُنشئ الملف")
@@ -573,7 +639,7 @@ def main():
     state = copy.copy(full_state)
     if project_id:
         state["projects"] = [p for p in full_state["projects"] if p["id"] == project_id]
-        for key in ("tasks", "files", "messages"):
+        for key in ("tasks", "files", "messages", "folders"):
             state[key] = [r for r in full_state[key] if r.get("projectId") == project_id]
         state["stakeholders"] = [r for r in full_state["stakeholders"] if not r.get("projectId") or r["projectId"] == project_id]
     from task_reminders import render_task_header

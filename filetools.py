@@ -64,7 +64,7 @@ def cell_text(value):
     return str(value)
 
 
-def parse_upload(filename, raw, project_id):
+def parse_upload(filename, raw, project_id, *, allow_attachment=False):
     if len(raw) > MAX_FILE:
         raise WorkspaceError("الحد الأقصى لكل ملف 8 ميجابايت.")
     suffix = Path(filename).suffix.lower()
@@ -151,6 +151,8 @@ def parse_upload(filename, raw, project_id):
             if not raw.lstrip().startswith(b"%PDF-"):
                 raise WorkspaceError("الملف ليس PDF صالحًا.")
             record.update(type="pdf", text="")
+        elif allow_attachment:
+            record.update(type="attachment", text="")
         else:
             raise WorkspaceError("الصيغ المدعومة: DOCX وXLSX وXLSM وXLS وCSV وTSV وPDF وTXT وMD وHTML. حوّل ملفات DOC القديمة إلى DOCX أولًا.")
     except WorkspaceError:

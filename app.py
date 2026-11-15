@@ -16,6 +16,7 @@ import streamlit as st
 
 from workspace import Store, WorkspaceError, Forbidden, Conflict, ROLES, STATUSES, PRIORITIES, now_iso, today_iso, morning_brief, uid
 from filetools import file_text, parse_upload, docx_bytes, tasks_excel
+from contacttools import task_contact_names
 from migration import build_merge
 from components import (flash, perform, lookup, record_picker, enum_picker, end_session, download_data,
                         end_day, account_settings, edit_task, task_time_input, task_delete_control, edit_directory, edit_file,
@@ -270,7 +271,7 @@ def tasks_page(store, token, state, actor):
     for task in state["tasks"]:
         if owner and task.get("assigneeId") != owner:
             continue
-        haystack = task["title"] + " " + str(task.get("notes", "")) + " " + lookup(state["members"], task.get("assigneeId")) + " " + lookup(state["stakeholders"], task.get("stakeholderId"), "")
+        haystack = task["title"] + " " + str(task.get("notes", "")) + " " + lookup(state["members"], task.get("assigneeId")) + " " + task_contact_names(task, state["stakeholders"])
         if query and query.casefold() not in haystack.casefold():
             continue
         pending = task.get("status") != "done"
@@ -331,7 +332,7 @@ def tasks_page(store, token, state, actor):
         "وقت الاستحقاق": time.fromisoformat(clock_parts(t["dueTime"])[0]) if t.get("dueTime") else None,
         "صباح / مساء": clock_parts(t.get("dueTime", ""))[1],
         "تنبيه صوتي": t.get("reminderEnabled", False), "قبل (دقيقة)": t.get("reminderMinutes", 15),
-        "دقيقة": int(t.get("estimatedMinutes") or 0), "جهة التواصل": lookup(state["stakeholders"], t.get("stakeholderId"), "—") } for t in baseline])
+        "دقيقة": int(t.get("estimatedMinutes") or 0), "جهة التواصل": task_contact_names(t, state["stakeholders"], "—") } for t in baseline])
     with st.form("table_" + view_key):
         edited = st.data_editor(frame, hide_index=True, width="stretch", height=min(540, 64 + 49 * len(frame)), row_height=48, column_order=list(reversed(frame.columns)),
             disabled=True if not store.can_edit(actor) else ["جهة التواصل"], column_config={

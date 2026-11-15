@@ -8,6 +8,7 @@ import unicodedata
 
 from workspace import WorkspaceError, prepare_import, uid
 from filetools import file_text, file_sheets
+from contacttools import task_contact_ids, set_task_contacts
 
 
 def label(value):
@@ -87,8 +88,9 @@ def build_merge(raw, state, project_id):
             summary["tasks_skipped"] += 1
             continue
         record = copy.deepcopy(source) | {"id": uid("t_"), "source_id": source["id"], "projectId": target,
-            "assigneeId": member_id(source.get("assigneeId")), "stakeholderId": contact_map.get(source.get("stakeholderId"), ""),
+            "assigneeId": member_id(source.get("assigneeId")),
             "attachedFileId": file_map.get(source.get("attachedFileId"), "")}
+        set_task_contacts(record, [contact_map[ident] for ident in task_contact_ids(source) if ident in contact_map])
         notes = record.get("notes", "")
         source_project = source_projects.get(source.get("projectId"), "")
         if source_project and target == project_id:

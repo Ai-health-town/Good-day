@@ -53,3 +53,24 @@ def matches_contact(record, query):
             key = re.sub(r"\D","",canonical) if canonical else digits.lstrip("0")
             return bool(key) and key in re.sub(r"\D","",target)
     return False
+
+
+def task_contact_ids(task):
+    """Read multiple contacts, with the original single-contact field as fallback."""
+    if "stakeholderIds" in task:
+        selected = task["stakeholderIds"]
+    else:
+        selected = [task["stakeholderId"]] if task.get("stakeholderId") else []
+    if not isinstance(selected, list) or any(not isinstance(ident, str) or not ident.strip() or len(ident) > 160 for ident in selected):
+        raise ValueError("اختيار جهات التواصل غير صالح؛ اختر الأشخاص أو الجهات من الدليل.")
+    return list(dict.fromkeys(selected))
+
+
+def set_task_contacts(task, selected):
+    selected = task_contact_ids({"stakeholderIds": selected})
+    task.update(stakeholderIds=selected, stakeholderId=selected[0] if selected else "")
+
+
+def task_contact_names(task, contacts, default=""):
+    names = {contact["id"]: contact["name"] for contact in contacts}
+    return "، ".join(names[ident] for ident in task_contact_ids(task) if ident in names) or default

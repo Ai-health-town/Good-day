@@ -17,6 +17,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 
 from workspace import WorkspaceError, STATUSES, PRIORITIES, now_iso, uid
+from contacttools import task_contact_names
 
 MAX_FILE = 8 * 1024 * 1024
 
@@ -219,5 +220,5 @@ def tasks_excel(state):
         rows.append([task.get("title", ""), names.get(task.get("projectId"), ""), names.get(task.get("assigneeId"), "غير معين"),
                      STATUSES.get(task.get("status"), ""), PRIORITIES.get(task.get("priority"), ""), task.get("dueDate", ""),
                      task.get("dueTime", ""), task.get("reminderMinutes", 15) if task.get("reminderEnabled") else "غير مفعّل",
-                     task.get("estimatedMinutes", 30), names.get(task.get("stakeholderId"), ""), task.get("notes", "")])
+                     task.get("estimatedMinutes", 30), task_contact_names(task, state["stakeholders"]), task.get("notes", "")])
     return sheet_bytes([{"name": "المهام", "rows": rows}])

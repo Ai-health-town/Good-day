@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
-from contacttools import phone_parts, phone_html, matches_contact
+from contacttools import phone_parts, phone_html, matches_contact, task_contact_ids
 from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
 COOKIE = "gday_session_v2"
@@ -202,14 +202,19 @@ def edit_task(store, token, state, actor, original=None):
         reminder_enabled = reminder.checkbox("تنبيه صوتي للمهمة", value=task.get("reminderEnabled", False), disabled=not editable)
         reminder_minutes = before.selectbox("التنبيه قبل", list(REMINDER_OPTIONS), index=list(REMINDER_OPTIONS).index(task.get("reminderMinutes", 15)), format_func=REMINDER_OPTIONS.get, disabled=not editable)
         st.caption("التنبيه للمسؤول عن المهمة؛ وإن لم تُسند، لمن أنشأها. فعّل الصوت من أعلى الصفحة واترك المنصة مفتوحة؛ قد يؤخر المتصفح التنبيه في الخلفية.")
-        stakeholder = record_picker("شخص أو جهة التواصل", state["stakeholders"], task.get("stakeholderId", ""))
+        contact_options = [record["id"] for record in state["stakeholders"]]
+        stakeholders = st.multiselect("الأشخاص وجهات التواصل", contact_options,
+            default=[ident for ident in task_contact_ids(task) if ident in contact_options],
+            format_func=lambda ident: lookup(state["stakeholders"], ident),
+            placeholder="اختر شخصًا أو جهة، ويمكنك اختيار أكثر من واحد…", disabled=not editable,
+            key="task_contacts_" + task["id"] + "_" + str(task.get("version", 0)))
         file_id = record_picker("ملف مرتبط بالمهمة", state["files"], task.get("attachedFileId", ""))
         notes = st.text_area("ملاحظات المهمة", task.get("notes", ""), height=100)
         if st.form_submit_button("حفظ المهمة", type="primary", disabled=not editable, width="stretch"):
             task.update(title=title.strip(), projectId=project, assigneeId=assignee, status=status, priority=priority,
                         dueDate=due.isoformat() if due else "",
                         reminderEnabled=reminder_enabled, reminderMinutes=reminder_minutes,
-                        estimatedMinutes=minutes, notes=notes, stakeholderId=stakeholder, attachedFileId=file_id)
+                        estimatedMinutes=minutes, notes=notes, stakeholderIds=stakeholders, attachedFileId=file_id)
             def save_task():
                 task["dueTime"] = clock_value(due_clock, due_period)
                 store.put(token, "tasks", task, original.get("version", 1) if original else None)

@@ -19,6 +19,7 @@ from contextlib import contextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from task_schedule import ScheduleError, validate_schedule, is_overdue
+from contacttools import task_contact_ids, set_task_contacts
 
 from sqlalchemy import (Boolean, Column, Float, Integer, MetaData, String, Table,
                         Text, bindparam, case, create_engine, delete, event, insert, select, update)
@@ -48,6 +49,13 @@ def validate_task_schedule(task):
     try:
         validate_schedule(task)
     except ScheduleError as exc:
+        raise WorkspaceError(str(exc)) from None
+
+
+def validate_task_contacts(task):
+    try:
+        set_task_contacts(task, task_contact_ids(task))
+    except ValueError as exc:
         raise WorkspaceError(str(exc)) from None
 
 
@@ -157,6 +165,7 @@ def prepare_import(raw):
                     if not isinstance(record.get(nested, []), list) or any(not isinstance(r, dict) for r in record.get(nested, [])):
                         raise WorkspaceError("تفاصيل مهمة غير صالحة.")
                 validate_task_schedule(record)
+                validate_task_contacts(record)
             if name in ("members", "projects", "stakeholders") and (not isinstance(record.get("name"), str) or not record["name"].strip()):
                 raise WorkspaceError("اسم غير صالح في " + name)
             if name == "messages" and not isinstance(record.get("text"), str):
@@ -495,6 +504,12 @@ class Store:
                 if record.get("status") not in STATUSES or record.get("priority") not in PRIORITIES:
                     raise WorkspaceError("اختر حالة وأولوية صحيحتين.")
                 validate_task_schedule(record)
+                explicit_contacts = "stakeholderIds" in record
+                validate_task_contacts(record)
+                if explicit_contacts and record["stakeholderIds"]:
+                    known_contacts = {contact["id"] for contact in state["stakeholders"]}
+                    if not set(record["stakeholderIds"]).issubset(known_contacts):
+                        raise WorkspaceError("إحدى جهات التواصل لم تعد موجودة؛ حدّث الصفحة واختر الجهات المتاحة.")
                 record.setdefault("createdBy", old.get("createdBy", actor["member_id"]) if old else actor["member_id"])
                 if record.get("status") == "done" and (not old or old.get("status") != "done"):
                     record["completedAt"] = now_iso()
@@ -577,7 +592,13 @@ class Store:
                     for item in state[name]:
                         if item.get("projectId") == ident:
                             item.update(projectId=fallback, version=item.get("version", 1) + 1)
-            reference = {"members": "assigneeId", "stakeholders": "stakeholderId", "files": "attachedFileId"}.get(collection)
+            if collection == "stakeholders":
+                for item in state["tasks"]:
+                    selected = task_contact_ids(item)
+                    if ident in selected:
+                        set_task_contacts(item, [value for value in selected if value != ident])
+                        item.update(version=item.get("version", 1) + 1, updatedAt=now_iso(), updatedBy=actor["member_id"])
+            reference = {"members": "assigneeId", "files": "attachedFileId"}.get(collection)
             if reference:
                 for item in state["tasks"]:
                     if item.get(reference) == ident:

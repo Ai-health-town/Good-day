@@ -1,6 +1,8 @@
 """Bounded Neon AI Gateway client. Models suggest changes; they never execute SQL."""
 from __future__ import annotations
 
+from contacttools import task_contact_ids, task_contact_names
+
 import io
 import json
 import re
@@ -156,6 +158,7 @@ def build_context(store, token, state, project_id, file_ids, question, include_w
         for task in tasks[:50]:
             data["tasks"].append({k: (str(task.get(k, ""))[:2000] if k == "notes" else task.get(k, ""))
                 for k in ("id", "title", "assigneeId", "status", "priority", "dueDate", "dueTime", "reminderEnabled", "reminderMinutes", "notes", "version")})
+            data["tasks"][-1].update(stakeholderIds=task_contact_ids(task), stakeholderNames=task_contact_names(task, state["stakeholders"]))
         data["members"] = [{"id": m["id"], "name": m["name"]} for m in state["members"][:200]]
         data["task_count_total"] = len(tasks)
         data["handover_shared"] = {k: str(state["handover"].get(k, ""))[:2500] for k in ("summary", "decisions", "next_step")}

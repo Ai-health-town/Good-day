@@ -468,8 +468,13 @@ class Store:
         return actor["role"] in ("admin", "manager", "member", "file_manager") or actor["role"] == "agent" and actor["agent_edit"]
 
     @staticmethod
+    def can_manage_library(actor):
+        return actor["role"] == "admin" or (
+            actor.get("username") == "abdullah" and actor["role"] in ("file_manager", "manager"))
+
+    @staticmethod
     def can_delete_files(actor):
-        return actor["role"] in ("admin", "manager", "file_manager")
+        return Store.can_manage_library(actor)
 
     @staticmethod
     def require(actor, permission):
@@ -477,12 +482,46 @@ class Store:
             okay = Store.can_edit(actor)
         elif permission == "delete_files":
             okay = Store.can_delete_files(actor)
+        elif permission == "manage_library":
+            okay = Store.can_manage_library(actor)
         elif permission == "manage":
             okay = actor["role"] in ("admin", "manager")
         else:
             okay = actor["role"] == "admin"
         if not okay:
             raise Forbidden("حسابك لا يملك صلاحية تنفيذ هذا الإجراء.")
+
+    @staticmethod
+    def require_file_update(actor, old, updated):
+        """Protect originals and filing metadata, while leaving working copies editable."""
+        Store.require(actor, "edit")
+        if Store.can_manage_library(actor):
+            return
+        working_fields = {"text", "content", "sheets", "sheetData", "pdfPages", "comments"}
+        generated = {"version", "updatedAt", "updatedBy"}
+        protected = (set(old) | set(updated)) - working_fields - generated
+        if any(old.get(key) != updated.get(key) for key in protected):
+            raise Forbidden("تعديل الأصل وبيانات الملف متاح للأدمن وعبدالله فقط. يمكنك تعديل محتوى نسخة العمل.")
+
+    @staticmethod
+    def require_library_restore(actor, current, incoming):
+        if Store.can_manage_library(actor):
+            return
+        files = {f["id"]: f for f in incoming["files"]}
+        folders = {f["id"]: f for f in incoming["folders"]}
+        for record in current["files"]:
+            if record["id"] not in files:
+                raise Forbidden("هذه الاستعادة تحذف ملفات من المكتبة؛ الحذف متاح للأدمن وعبدالله فقط.")
+            Store.require_file_update(actor, record, files[record["id"]])
+        for record in current["folders"]:
+            updated = folders.get(record["id"])
+            protected = set(record) - {"version", "updatedAt", "updatedBy"}
+            if updated is None or any(record.get(key) != updated.get(key) for key in protected):
+                raise Forbidden("هذه الاستعادة تغيّر مجلدات المكتبة؛ إدارة المجلدات الحالية للأدمن وعبدالله فقط.")
+        used_projects = {r.get("projectId") for name in ("files", "folders") for r in current[name]}
+        removed_projects = {p["id"] for p in current["projects"]} - {p["id"] for p in incoming["projects"]}
+        if used_projects & removed_projects:
+            raise Forbidden("لا يمكن إزالة مشروع مرتبط بمحتويات المكتبة دون صلاحية إدارة المكتبة.")
 
     def read(self, token):
         state, revision, _ = self.context(token)
@@ -510,6 +549,10 @@ class Store:
                     raise Conflict("عدّل شخص آخر هذا السجل. حدّث الصفحة لعرض آخر تعديل قبل الحفظ.")
                 if collection == "messages" and old.get("authorId") != actor["member_id"]:
                     raise Forbidden("لا يمكن تعديل رسالة عضو آخر.")
+                if collection == "files":
+                    self.require_file_update(actor, old, record)
+                elif collection == "folders":
+                    self.require(actor, "manage_library")
             elif expected_version is not None:
                 raise Conflict("السجل حُذف منذ فتحه. حدّث الصفحة.")
             if collection in ("projects", "members", "stakeholders"):
@@ -580,6 +623,8 @@ class Store:
                         for name in ("tasks", "files", "stakeholders")}
             counts = {name: len(records) for name, records in selected.items()}
             moved_folders = [f for f in state["folders"] if f.get("projectId") == source_id]
+            if selected["files"] or moved_folders:
+                self.require(actor, "manage_library")
             if any(counts.values()) or moved_folders:
                 self._snapshot(conn, state, "قبل نقل محتوى المشروع: " + projects[source_id]["name"])
                 rehome_folders(state, source_id, target_id)
@@ -615,6 +660,8 @@ class Store:
                 raise WorkspaceError("هذا الملف مرتبط بحساب. أوقف الحساب من إدارة الأعضاء بدل حذفه.")
             if collection == "projects" and len(state["projects"]) == 1:
                 raise WorkspaceError("احتفظ بمشروع واحد على الأقل.")
+            if collection == "projects" and any(r.get("projectId") == ident for name in ("files", "folders") for r in state[name]):
+                self.require(actor, "manage_library")
             if collection == "folders" and (any(f.get("parentId") == ident for f in state["folders"]) or
                                                any(f.get("folderId") == ident for f in state["files"])):
                 raise WorkspaceError("انقل محتويات المجلد أولًا؛ يمكن حذف المجلد الفارغ فقط.")
@@ -901,6 +948,7 @@ class Store:
             current, revision = self._state(conn)
             if revision != expected_revision:
                 raise Conflict("تغيرت البيانات منذ عرض المعاينة. أعد رفع الملف وراجع المعاينة.")
+            self.require_library_restore(actor, current, imported["data"])
             self._snapshot(conn, current, "قبل استعادة ملف بداية اليوم")
             incoming = imported["data"]
             # Keep actual login accounts and their linked profiles intact.

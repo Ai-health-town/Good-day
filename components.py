@@ -45,12 +45,12 @@ def download_data(store, token, build):
     return prepare
 
 
-def record_picker(label, records, value="", empty=True, key=None):
+def record_picker(label, records, value="", empty=True, key=None, disabled=False):
     options = ([""] if empty else []) + [x["id"] for x in records]
     if not options:
         options = [""]
     return st.selectbox(label, options, index=options.index(value) if value in options else 0,
-                        format_func=lambda v: lookup(records, v, "بدون تحديد"), key=key)
+                        format_func=lambda v: lookup(records, v, "بدون تحديد"), key=key, disabled=disabled)
 
 
 def enum_picker(label, choices, value=None, key=None):
@@ -336,10 +336,14 @@ def edit_directory(store, token, state, actor, collection, original=None):
             perform(save_directory)
     if original and actor["role"] in ("admin", "manager"):
         with st.expander("حذف السجل"):
+            protected_library = collection == "projects" and not store.can_manage_library(actor) and any(
+                r.get("projectId") == original["id"] for name in ("files", "folders") for r in state.get(name, []))
             if collection == "projects":
                 st.caption("تنتقل عناصر المشروع إلى أول مشروع آخر؛ تبقى المهام والملفات والمحادثات محفوظة.")
+                if protected_library:
+                    st.caption("يرتبط المشروع بمكتبة ملفات؛ حذفه متاح للأدمن وعبدالله فقط.")
             confirmed = st.checkbox("أريد حذف هذا السجل")
-            if st.button("تأكيد الحذف", disabled=not confirmed):
+            if st.button("تأكيد الحذف", disabled=not confirmed or protected_library):
                 perform(lambda: store.remove(token, collection, original["id"], original.get("version", 1)), "حُذف السجل")
 
 
@@ -424,12 +428,14 @@ def edit_file(store, token, state, actor, original):
 
 
 def file_working_copy(store,token,state,actor,original,record,editable,original_bytes):
-    title = st.text_input("اسم الملف", record["title"], disabled=not editable)
-    project = record_picker("مشروع الملف", state["projects"], record.get("projectId"), empty=False)
-    folder = library_folder_picker(state, project, record.get("folderId", ""), disabled=not editable,
+    manage_original = editable and store.can_manage_library(actor)
+    title = st.text_input("اسم الملف", record["title"], disabled=not manage_original)
+    project = record_picker("مشروع الملف", state["projects"], record.get("projectId"), empty=False, disabled=not manage_original)
+    folder = library_folder_picker(state, project, record.get("folderId", ""), disabled=not manage_original,
                                    key="file_folder_" + record["id"] + "_" + project + "_" + str(record.get("version", 1)))
-    star = st.checkbox("تمييز الملف", value=bool(record.get("starred")), disabled=not editable)
-    record.update(title=title, projectId=project, folderId=folder, starred=star)
+    star = st.checkbox("تمييز الملف", value=bool(record.get("starred")), disabled=not manage_original)
+    if manage_original:
+        record.update(title=title, projectId=project, folderId=folder, starred=star)
     if record.get("type") == "sheet":
         sheets = copy.deepcopy(file_sheets(record))
         selected = st.selectbox("ورقة العمل", range(len(sheets)), format_func=lambda i: sheets[i]["name"])

@@ -469,7 +469,7 @@ def files_page(store, token, state, actor):
             if st.button("فتح الملف", key="open_file_" + record["id"], width="stretch"):
                 edit_file(store, token, state, actor, record)
     if store.can_edit(actor):
-        if selected_folder:
+        if selected_folder and store.can_manage_library(actor):
             with st.expander("إدارة المجلد"):
                 with st.form("rename_folder_" + current):
                     folder_title = st.text_input("اسم المجلد", selected_folder["name"], max_chars=180)

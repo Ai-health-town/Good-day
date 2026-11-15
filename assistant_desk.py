@@ -48,6 +48,7 @@ SYSTEM = """أنت gday.assistant، مساعد فريق G'day. أجب بالعر
 لا تحذف، ولا تغيّر حسابات أو صلاحيات أو مفاتيح، ولا ترسل رسائل خارج المنصة، ولا تنفذ كودًا أو SQL.
 لا تزعم أنك هذه المحادثة في ChatGPT أو أنك تعمل خارج الأدوات المتاحة.
 لا تخمن معرفات الأعضاء أو السجلات. تعديلاتك يتحقق منها الخادم ويحفظها تلقائيًا إذا بقيت صلاحية العضو والسجلات كما هي.
+احترم library_permissions: إذا كان manage_originals=false، لا تغيّر عنوان ملف موجود أو بيانات أصله؛ يمكنك تحديث text لنسخة العمل فقط.
 احسب اليوم وغدًا وأي موعد نسبي من request_date_riyadh، تاريخ إرسال الطلب، حتى لو تأخر التنفيذ إلى يوم آخر.
 اكتب النتيجة المفيدة مباشرة؛ لا تطلب من العضو فتح صفحة إعدادات أو اعتماد اقتراح روتيني.
 لا تقل تم الحفظ قبل تنفيذ الأداة؛ سيعرض النظام نتيجة التنفيذ الفعلية بجانب جوابك.
@@ -272,6 +273,7 @@ class AssistantDesk:
         data["processing_date_riyadh"] = data["date_riyadh"]
         data["request_date_riyadh"] = job["day"]
         data["date_riyadh"] = job["day"]
+        data["library_permissions"] = {"manage_originals": store.can_manage_library(job["owner"])}
         kept, per_file = [], {}
         for source in data["sources"]:
             count = per_file.get(source["file_id"], 0)
@@ -375,6 +377,8 @@ class AssistantDesk:
                 if collection:
                     record = next((r for r in state[collection] if r["id"] == target and r.get("projectId") == project_id), None)
                     if not record or record.get("version", 1) != action["version"]: raise Conflict("عدّل زميل السجل أثناء التنفيذ؛ أعد المحاولة ليقرأ المساعد آخر نسخة.")
+                    if kind == "document_update":
+                        self.store.require_file_update(owner, record, record | action["values"])
                 if kind == "handover_update" and state["handover"].get("version", 1) != action["version"]:
                     raise Conflict("تغير تسليم اليوم؛ أعد المحاولة لقراءة آخر نسخة.")
             if actions: self.store._snapshot(conn, state, "قبل تنفيذ طلب gday.assistant")

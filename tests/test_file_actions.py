@@ -6,8 +6,13 @@ from streamlit.testing.v1 import AppTest
 
 from filetools import parse_upload
 from tests.test_ui import element, healthy
-from tests.test_workspace import workspace, make_user, task
+from tests.test_workspace import workspace, make_user, task, PASSWORD
 from workspace import Forbidden, Store, snapshots
+
+
+def make_abdullah(store, owner):
+    ident = store.create_user(owner, "abdullah", "عبدالله", PASSWORD, "file_manager")
+    return ident, store.login("abdullah", PASSWORD)
 
 
 def seed(store, token):
@@ -44,11 +49,11 @@ else:
 
 
 @pytest.mark.parametrize("mode", ["معاينة الأصل", "نسخة العمل", "التعليقات"])
-@pytest.mark.parametrize("role", ["manager", "file_manager"])
-def test_manager_can_delete_an_existing_upload_from_every_file_mode(workspace, monkeypatch, mode, role):
+@pytest.mark.parametrize("role", ["admin", "abdullah"])
+def test_only_admin_and_abdullah_delete_existing_uploads_from_every_file_mode(workspace, monkeypatch, mode, role):
     store, owner = workspace
     seed(store, owner)
-    _, manager = make_user(store, owner, role)
+    manager = owner if role == "admin" else make_abdullah(store, owner)[1]
     before = store.read(owner)[0]
     app = file_dialog(store, manager, monkeypatch, mode)
     assert element(app.button, "حذف الملف من المكتبة").disabled
@@ -65,7 +70,7 @@ def test_manager_can_delete_an_existing_upload_from_every_file_mode(workspace, m
     assert json.loads(saved) == before
 
 
-@pytest.mark.parametrize("role,edit", [("member", False), ("viewer", False), ("agent", True)])
+@pytest.mark.parametrize("role,edit", [("manager", False), ("file_manager", False), ("member", False), ("viewer", False), ("agent", True)])
 def test_file_delete_does_not_expand_unrelated_account_permissions(workspace, monkeypatch, role, edit):
     store, owner = workspace
     record = seed(store, owner)
@@ -78,10 +83,10 @@ def test_file_delete_does_not_expand_unrelated_account_permissions(workspace, mo
     assert not store.list_snapshots(owner)
 
 
-def test_file_manager_has_member_editing_and_file_deletion_only(workspace):
+def test_abdullah_has_member_editing_and_file_deletion_without_admin_access(workspace):
     store, owner = workspace
     record = seed(store, owner)
-    ident, token = make_user(store, owner, "file_manager")
+    ident, token = make_abdullah(store, owner)
     assert store.can_edit(store.actor(token))
     store.put(token, "tasks", task("member-task"))
     store.put(token, "messages", {"id": "own-message", "text": "رسالتي", "projectId": "p_general"})

@@ -15,6 +15,34 @@ from tests.test_assistant_desk import desk
 from tests.test_file_preview import workbook_bytes
 
 
+def test_resource_reload_uses_current_store_class_and_preserves_resource_reuse(tmp_path, monkeypatch):
+    import app as app_module
+    import cloud_storage
+
+    monkeypatch.setattr(cloud_storage, "storage_from_settings", lambda _: (None, ""))
+    # Simulate an earlier imported class retained in a cached callable's globals.
+    class EarlierStore:
+        def __init__(self, url):
+            raise AssertionError("The resource used a stale Store class")
+
+    class CurrentStore(Store):
+        pass
+
+    class ReloadedStore(Store):
+        pass
+
+    monkeypatch.setattr(app_module, "Store", EarlierStore)
+    url = "sqlite:///" + str(tmp_path / "resource_reload.db")
+    first = app_module.open_store(url, id(CurrentStore), CurrentStore)
+    assert isinstance(first, CurrentStore)
+    assert app_module.open_store(url, id(CurrentStore), CurrentStore) is first
+    reloaded = app_module.open_store(url, id(ReloadedStore), ReloadedStore)
+    assert isinstance(reloaded, ReloadedStore) and reloaded is not first
+    assert hasattr(reloaded, "can_manage_library")
+    assert not reloaded.can_manage_library({"role": "manager", "username": "supervisor"})
+    assert reloaded.can_manage_library({"role": "file_manager", "username": "abdullah"})
+
+
 @pytest.mark.parametrize("field,value", [
     ("title", "اسم مختلف"), ("projectId", "another-project"), ("folderId", "another-folder"),
     ("starred", True), ("type", "pdf"), ("originalName", "replacement.pdf"),

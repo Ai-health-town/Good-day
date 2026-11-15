@@ -43,12 +43,14 @@ def setting(name, default=""):
 
 
 @st.cache_resource
-def open_store(url, store_generation):
+def open_store(url, store_generation, _store_class):
     # Streamlit may retain resources while reloading imported modules. A store
     # from an earlier module raises earlier exception classes, which the new
     # app cannot catch as Forbidden. Rebuild it for the current Store class.
+    # Pass that class explicitly: a cached callable can retain earlier globals
+    # while a deployment reloads modules in a running Streamlit process.
     from cloud_storage import storage_from_settings
-    store = Store(url)
+    store = _store_class(url)
     store.storage, store.storage_error = storage_from_settings(setting)
     return store
 
@@ -583,7 +585,7 @@ def main():
         return
     if url.startswith("sqlite:") and not local_mode:
         st.error("استخدم PostgreSQL للحفظ الدائم على الاستضافة. SQLite مخصص للتجربة المحلية."); return
-    store = open_store(url, id(Store))
+    store = open_store(url, id(Store), Store)
     if not store.initialized():
         username, password = str(setting("GDAY_ADMIN_USERNAME")), str(setting("GDAY_ADMIN_PASSWORD"))
         if not username or not password or password.startswith(("REPLACE", "CHANGE", "your_")):

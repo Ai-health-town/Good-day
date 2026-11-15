@@ -91,11 +91,15 @@ def login_page(store):
 
 def metrics(state):
     brief = morning_brief(state)
-    done = sum(t.get("status") == "done" for t in state["tasks"])
+    today = today_iso()
+    today_tasks = [task for task in state["tasks"] if task.get("dueDate") == today]
+    done = sum(task.get("status") == "done" for task in today_tasks)
+    completion = round(done / len(today_tasks) * 100) if today_tasks else 0
+    progress_help = f"اكتملت {done} من {len(today_tasks)} مهام مستحقة اليوم، بتوقيت الرياض." if today_tasks else "لا توجد مهام مستحقة اليوم، بتوقيت الرياض."
     cols = st.columns(4)
-    for col, name, value in zip(cols, ["مهام اليوم", "تحتاج متابعة", "بانتظار جهة", "نسبة الإنجاز"],
-        [len(brief["today"]), len(brief["overdue"]), len(brief["waiting"]), f"{round(done / len(state['tasks']) * 100) if state['tasks'] else 0}%"]):
-        col.metric(name, value)
+    for col, name, value in zip(cols, ["مهام اليوم", "تحتاج متابعة", "بانتظار جهة", "نسبة إنجاز اليوم"],
+        [len(brief["today"]), len(brief["overdue"]), len(brief["waiting"]), f"{completion}%"]):
+        col.metric(name, value, help=progress_help if name == "نسبة إنجاز اليوم" else None)
 
 
 @st.dialog("☀ بداية اليوم والاستيراد", width="large")

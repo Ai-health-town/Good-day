@@ -7,7 +7,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 from filetools import docx_bytes, file_sheets, file_text, sheet_bytes
-from contacttools import phone_parts, phone_html, matches_contact, task_contact_ids
+from contacttools import phone_parts, phone_html, matches_contact, contact_emails, task_contact_ids
 from foldertools import folder_labels
 from task_schedule import REMINDER_OPTIONS, DAY_PERIODS, ScheduleError, clock_parts, clock_value
 from workspace import ROLES, STATUSES, PRIORITIES, Store, WorkspaceError, Forbidden, now_iso, today_iso, uid
@@ -322,6 +322,8 @@ def edit_directory(store, token, state, actor, collection, original=None):
                 record["phone"] = st.text_input("رقم التواصل", record.get("phone", ""), max_chars=80)
             with st.container(key="contact_email_input"):
                 record["email"] = st.text_input("البريد الإلكتروني", record.get("email", ""))
+                if record.get("centerName") or record.get("centerEmail"):
+                    record["centerEmail"] = st.text_input("بريد المركز الرسمي", record.get("centerEmail", ""), max_chars=300)
             record["notes"] = st.text_area("الملاحظات", record.get("notes", ""))
         else:
             record["title"] = st.text_input("المسمى أو الدور", record.get("title", ""))
@@ -380,9 +382,11 @@ def directory_page(store, token, state, actor, collection):
                         call, whatsapp = st.columns(2)
                         call.link_button("اتصال", "tel:" + number, width="stretch")
                         whatsapp.link_button("واتساب", "https://wa.me/" + number[1:], width="stretch")
-                if record.get("email"):
+                for email_label, email_value in contact_emails(record):
                     from html import escape
-                    st.markdown('<div class="contact-email" dir="ltr"><bdi dir="ltr">' + escape(str(record["email"])) + '</bdi></div>',unsafe_allow_html=True)
+                    if record.get("centerEmail"):
+                        st.caption(email_label)
+                    st.markdown('<div class="contact-email" dir="ltr"><bdi dir="ltr">' + escape(email_value) + '</bdi></div>',unsafe_allow_html=True)
                 if record.get("notes"):
                     st.write(record["notes"])
             if st.button("عرض وتعديل", key="directory_" + record["id"]):

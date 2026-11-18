@@ -61,6 +61,17 @@ def test_daily_40_counter_does_not_block_new_requests(desk):
     assert repo.list_requests(token, "p_work")[0]["answer"] == "هذه نتيجة محفوظة"
 
 
+def test_assistant_reads_center_address_without_replacing_manager_address(desk):
+    store, token, _, repo = desk
+    store.put(token, 'stakeholders', {'id':'center_manager','name':'مدير المركز','projectId':'p_work',
+              'email':'manager@example.test','centerEmail':'center@example.test'})
+    submit(desk)
+    job=repo.claim()
+    data, _, _, _=repo.prepare(job)
+    assert data['contacts'][0]['email']=='manager@example.test'
+    assert data['contacts'][0]['centerEmail']=='center@example.test'
+
+
 def test_results_are_private_and_other_accounts_cannot_retry_them(desk):
     store, token, _, repo = desk
     ident = submit(desk)

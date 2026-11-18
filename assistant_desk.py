@@ -291,7 +291,7 @@ class AssistantDesk:
                 raise WorkspaceError("لم يتوفر نص قابل للتلخيص في الملفات المختارة. أضف نسخة نصية أو ملاحظات لها ثم أعد المحاولة.")
         data["tasks"] = data["tasks"][:25]
         for task in data["tasks"]: task["notes"] = task.get("notes", "")[:600]
-        data["contacts"] = [{k: s.get(k, "") for k in ("id", "name", "org", "phone", "email", "notes", "version")}
+        data["contacts"] = [{k: s.get(k, "") for k in ("id", "name", "org", "phone", "email", "centerEmail", "notes", "version")}
                             for s in state["stakeholders"] if s.get("projectId") == project_id][:30]
         if manual_selection:
             # Explicit sources take priority over unrelated workspace context.

@@ -42,7 +42,7 @@ def matches_contact(record, query):
     query = str(query or "").translate(_DIGITS).strip()
     if not query:
         return True
-    text = " ".join(str(record.get(k,"")) for k in ("name","org","phone","email"))
+    text = " ".join(str(record.get(k,"")) for k in ("name","org","phone","email","centerEmail"))
     if query.casefold() in text.casefold():
         return True
     if re.fullmatch(r"[+\d\s().-]+",query):
@@ -53,6 +53,17 @@ def matches_contact(record, query):
             key = re.sub(r"\D","",canonical) if canonical else digits.lstrip("0")
             return bool(key) and key in re.sub(r"\D","",target)
     return False
+
+
+def contact_emails(record):
+    """Keep the center's official address separate from the person's address."""
+    result, seen = [], set()
+    for field, label in (("centerEmail", "بريد المركز الرسمي"), ("email", "البريد الإلكتروني")):
+        value = str(record.get(field) or "").translate(_DIRECTION_MARKS).strip()
+        if value and value.casefold() not in seen:
+            result.append((label, value))
+            seen.add(value.casefold())
+    return result
 
 
 def task_contact_ids(task):

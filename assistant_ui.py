@@ -15,12 +15,15 @@ from assistant_desk import ACTIVE, MAX_SELECTED_FILES, AssistantDesk, DeskWorker
 from components import download_data, edit_file, edit_task, lookup
 from filetools import docx_bytes
 from workspace import WorkspaceError, uid, ZONE
+from assistant_search import SEARCH_VERSION
 
 
 @st.cache_resource
-def resources(identity, _store, _config):
-    desk = AssistantDesk(_store)
-    return desk, DeskWorker(desk, _config, client_factory=NeonAI)
+def resources(identity, _store, _config, _desk_class, _worker_class, _client_class):
+    # Pass current factories explicitly: a cached callable may retain old globals
+    # across a Streamlit source reload.
+    desk = _desk_class(_store)
+    return desk, _worker_class(desk, _config, client_factory=_client_class)
 
 
 def _render_request(desk, worker, store, token, job):
@@ -47,6 +50,8 @@ def _render_request(desk, worker, store, token, job):
     else:
         with st.chat_message("assistant", avatar="✳"):
             st.markdown(job["answer"].replace("![", "\\!["), unsafe_allow_html=False)
+        if job.get("model")=="workspace-directory":
+            st.caption("نتيجة مباشرة من دليل جهات المشروع، مع الحفاظ على البيانات الأصلية.")
         count = job["meta"].get("executed", 0)
         if count: st.success(f"حُفظت {count} تغييرات في المشروع بواسطة gday.assistant.")
         a, b = st.columns(2)
@@ -65,7 +70,10 @@ def _render_request(desk, worker, store, token, job):
                 if record: edit_file(store, token, state, actor, record)
         if job["meta"].get("sources") or job["meta"].get("warnings"):
             with st.expander("المصادر وتفاصيل القراءة"):
-                for source in job["meta"].get("sources", []): st.caption(f"[{source['ref']}] {source['title']} · مقتطف {source['chunk']}")
+                for source in job["meta"].get("sources", []):
+                    location = ("سجل جهة اتصال" if source.get("kind")=="contact" else "مهمة في المشروع" if source.get("kind")=="task" else
+                                f"ورقة {source['sheet']} · الصف {source['row']}" if source.get("sheet") and source.get("row") else f"مقتطف {source.get('chunk',1)}")
+                    st.caption(f"[{source['ref']}] {source['title']} · {location}")
                 for warning in job["meta"].get("warnings", []): st.caption(warning)
 
 
@@ -82,8 +90,9 @@ def help_center(store, token, state, actor, setting):
     config, _ = AIConfig.load(setting)
     if config:
         config = replace(config, model=str(setting("GDAY_ASSISTANT_MODEL", "gpt-6-luna")), output_tokens=min(2400, config.output_tokens))
-    fingerprint = hashlib.sha256((config.base_url + config.token + config.model + str(config.output_tokens)).encode()).hexdigest() if config else "unconfigured"
-    desk, worker = resources(str(id(store)) + ":" + str(id(AssistantDesk)) + ":" + str(id(NeonAI)) + ":" + fingerprint, store, config)
+    fingerprint = hashlib.sha256((config.base_url + config.token + config.model + str(config.output_tokens)+SEARCH_VERSION).encode()).hexdigest() if config else "unconfigured:"+SEARCH_VERSION
+    identity = ":".join(str(id(c)) for c in (store, AssistantDesk, DeskWorker, NeonAI)) + ":" + fingerprint
+    desk, worker = resources(identity, store, config, AssistantDesk, DeskWorker, NeonAI)
     projects = state["projects"]
     if not projects:
         st.info("أضف مشروعًا أولًا ليعمل المساعد على سياقه.")
@@ -123,7 +132,7 @@ def help_center(store, token, state, actor, setting):
                 else:
                     st.info("لا توجد ملفات في هذا المشروع بعد. أضفها من صفحة الملفات ثم اخترها هنا.")
             question = st.text_area("وش تحتاج من المساعد؟", key="desk_question", height=115, max_chars=4000,
-                placeholder="مثال: جهز لي ملخصًا تنفيذيًا من ملفات المشروع، أو أضف مهمة متابعة لخالد…")
+                placeholder="اسأل عن جهة أو ملف، أو اطلب تلخيصًا أو تنفيذ مهمة…")
             submit = st.form_submit_button("إرسال إلى المساعد ←", type="primary", width="stretch", disabled=file_mode and not library_files)
         st.caption("يقرأ المساعد مقتطفات من الملفات المختارة، ويحفظ النتيجة هنا مع طلبك." if file_mode else
             "طلبك يُحفظ كمهمة في المشروع مسندة للمساعد. يقرأ سياق المشروع ومقتطفات الملفات ذات الصلة، وتظهر النتيجة لحسابك هنا.")

@@ -477,11 +477,18 @@ class Store:
         return Store.can_manage_library(actor)
 
     @staticmethod
+    def can_delete_tasks(actor):
+        return actor["role"] in ("admin", "manager") or (
+            actor.get("username") == "abdullah" and actor["role"] == "file_manager")
+
+    @staticmethod
     def require(actor, permission):
         if permission == "edit":
             okay = Store.can_edit(actor)
         elif permission == "delete_files":
             okay = Store.can_delete_files(actor)
+        elif permission == "delete_tasks":
+            okay = Store.can_delete_tasks(actor)
         elif permission == "manage_library":
             okay = Store.can_manage_library(actor)
         elif permission == "manage":
@@ -648,6 +655,8 @@ class Store:
                     raise Forbidden("حساب المساعد لا يحذف الدردشات.")
             elif collection in ("files", "folders"):
                 self.require(actor, "delete_files")
+            elif collection == "tasks":
+                self.require(actor, "delete_tasks")
             else:
                 self.require(actor, "manage")
             state, revision = self._state(conn)

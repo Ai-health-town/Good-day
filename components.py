@@ -95,9 +95,9 @@ def task_time_input(label, value="", *, key, disabled=False):
 
 
 def task_delete_control(store, token, actor, task, *, key, slot=st):
-    if actor["role"] not in ("admin", "manager"):
+    if not store.can_delete_tasks(actor):
         slot.button("حذف المهمة", icon=":material/delete:", disabled=True, width="stretch",
-                    help="حذف المهام متاح لمدير المساحة ومشرف الفريق.", key="task_delete_disabled_" + key)
+                    help="حذف المهام متاح لمدير المساحة ومشرف الفريق وعبدالله.", key="task_delete_disabled_" + key)
         return
     suffix = key + "_" + task["id"] + "_" + str(task.get("version", 1))
     with slot.popover("حذف المهمة", icon=":material/delete:", width="stretch", key="delete_task_" + suffix):
